@@ -1,0 +1,604 @@
+object FormMain: TFormMain
+  Left = 0
+  Top = 0
+  Caption = 'Dialog4D - Basic Demo'
+  ClientHeight = 800
+  ClientWidth = 400
+  FormFactor.Width = 320
+  FormFactor.Height = 480
+  FormFactor.Devices = [Desktop, iPhone, iPad]
+  OnCreate = FormCreate
+  DesignerMasterStyle = 0
+  object MemoLog: TMemo
+    Touch.InteractiveGestures = [Pan, LongTap, DoubleTap]
+    DataDetectorTypes = []
+    StyledSettings = [Family, Style, FontColor]
+    Align = Client
+    Margins.Left = 5.000000000000000000
+    Margins.Top = 5.000000000000000000
+    Margins.Right = 5.000000000000000000
+    Margins.Bottom = 5.000000000000000000
+    Size.Width = 390.000000000000000000
+    Size.Height = 226.000000000000000000
+    Size.PlatformDefault = False
+    TabOrder = 3
+    Viewport.Width = 386.000000000000000000
+    Viewport.Height = 222.000000000000000000
+  end
+  object ScrollButtons: TVertScrollBox
+    Align = Top
+    Margins.Left = 5.000000000000000000
+    Margins.Top = 5.000000000000000000
+    Margins.Right = 5.000000000000000000
+    Margins.Bottom = 5.000000000000000000
+    Position.X = 5.000000000000000000
+    Position.Y = 5.000000000000000000
+    Size.Width = 390.000000000000000000
+    Size.Height = 500.000000000000000000
+    Size.PlatformDefault = False
+    TabOrder = 5
+    Viewport.Width = 374.000000000000000000
+    Viewport.Height = 500.000000000000000000
+    object ButtonInfoOk: TButton
+      Align = Top
+      Margins.Left = 5.000000000000000000
+      Margins.Top = 5.000000000000000000
+      Margins.Right = 5.000000000000000000
+      Position.X = 5.000000000000000000
+      Position.Y = 5.000000000000000000
+      Size.Width = 364.000000000000000000
+      Size.Height = 44.000000000000000000
+      Size.PlatformDefault = False
+      TabOrder = 0
+      Text = '1.1  Information (OK)'
+      OnClick = ButtonInfoOkClick
+    end
+    object ButtonConfirmYesNo: TButton
+      Align = Top
+      Margins.Left = 5.000000000000000000
+      Margins.Top = 5.000000000000000000
+      Margins.Right = 5.000000000000000000
+      Position.X = 5.000000000000000000
+      Position.Y = 54.000000000000000000
+      Size.Width = 364.000000000000000000
+      Size.Height = 44.000000000000000000
+      Size.PlatformDefault = False
+      TabOrder = 1
+      Text = '1.2  Confirmation (Yes / No)'
+      OnClick = ButtonConfirmYesNoClick
+    end
+    object ButtonWarningYesNoCancel: TButton
+      Align = Top
+      Margins.Left = 5.000000000000000000
+      Margins.Top = 5.000000000000000000
+      Margins.Right = 5.000000000000000000
+      Position.X = 5.000000000000000000
+      Position.Y = 103.000000000000000000
+      Size.Width = 364.000000000000000000
+      Size.Height = 44.000000000000000000
+      Size.PlatformDefault = False
+      TabOrder = 2
+      Text = '1.3  Warning (Yes / No / Cancel)'
+      OnClick = ButtonWarningYesNoCancelClick
+    end
+    object ButtonErrorRetryCancel: TButton
+      Align = Top
+      Margins.Left = 5.000000000000000000
+      Margins.Top = 5.000000000000000000
+      Margins.Right = 5.000000000000000000
+      Position.X = 5.000000000000000000
+      Position.Y = 152.000000000000000000
+      Size.Width = 364.000000000000000000
+      Size.Height = 44.000000000000000000
+      Size.PlatformDefault = False
+      TabOrder = 3
+      Text = '1.4  Error (Retry / Cancel)'
+      OnClick = ButtonErrorRetryCancelClick
+    end
+    object ButtonNoCancelTapOutside: TButton
+      Align = Top
+      Margins.Left = 5.000000000000000000
+      Margins.Top = 5.000000000000000000
+      Margins.Right = 5.000000000000000000
+      Position.X = 5.000000000000000000
+      Position.Y = 201.000000000000000000
+      Size.Width = 364.000000000000000000
+      Size.Height = 44.000000000000000000
+      Size.PlatformDefault = False
+      TabOrder = 4
+      Text = '1.5  No cancel button'
+      OnClick = ButtonNoCancelTapOutsideClick
+    end
+    object ButtonCustomTheme: TButton
+      Align = Top
+      Margins.Left = 5.000000000000000000
+      Margins.Top = 5.000000000000000000
+      Margins.Right = 5.000000000000000000
+      Position.X = 5.000000000000000000
+      Position.Y = 250.000000000000000000
+      Size.Width = 364.000000000000000000
+      Size.Height = 44.000000000000000000
+      Size.PlatformDefault = False
+      TabOrder = 5
+      Text = '2.1  Custom theme'
+      OnClick = ButtonCustomThemeClick
+    end
+    object ButtonDarkTheme: TButton
+      Align = Top
+      Margins.Left = 5.000000000000000000
+      Margins.Top = 5.000000000000000000
+      Margins.Right = 5.000000000000000000
+      Position.X = 5.000000000000000000
+      Position.Y = 299.000000000000000000
+      Size.Width = 364.000000000000000000
+      Size.Height = 44.000000000000000000
+      Size.PlatformDefault = False
+      TabOrder = 6
+      Text = '2.2  Dark theme'
+      OnClick = ButtonDarkThemeClick
+    end
+    object ButtonCyberpunkTheme: TButton
+      Align = Top
+      Margins.Left = 5.000000000000000000
+      Margins.Top = 5.000000000000000000
+      Margins.Right = 5.000000000000000000
+      Position.X = 5.000000000000000000
+      Position.Y = 348.000000000000000000
+      Size.Width = 364.000000000000000000
+      Size.Height = 44.000000000000000000
+      Size.PlatformDefault = False
+      TabOrder = 7
+      Text = '2.3  Cyberpunk theme'
+      OnClick = ButtonCyberpunkThemeClick
+    end
+    object ButtonTreatCloseAsCancel: TButton
+      Align = Top
+      Margins.Left = 5.000000000000000000
+      Margins.Top = 5.000000000000000000
+      Margins.Right = 5.000000000000000000
+      Position.X = 5.000000000000000000
+      Position.Y = 397.000000000000000000
+      Size.Width = 364.000000000000000000
+      Size.Height = 44.000000000000000000
+      Size.PlatformDefault = False
+      TabOrder = 8
+      Text = '2.4  TreatCloseAsCancel'
+      OnClick = ButtonTreatCloseAsCancelClick
+    end
+    object ButtonJPProvider: TButton
+      Align = Top
+      Margins.Left = 5.000000000000000000
+      Margins.Top = 5.000000000000000000
+      Margins.Right = 5.000000000000000000
+      Position.X = 5.000000000000000000
+      Position.Y = 446.000000000000000000
+      Size.Width = 364.000000000000000000
+      Size.Height = 44.000000000000000000
+      Size.PlatformDefault = False
+      TabOrder = 9
+      Text = '2.5  Japanese provider'
+      OnClick = ButtonJPProviderClick
+    end
+    object ButtonRestoreDefaultProvider: TButton
+      Align = Top
+      Margins.Left = 5.000000000000000000
+      Margins.Top = 5.000000000000000000
+      Margins.Right = 5.000000000000000000
+      Position.X = 5.000000000000000000
+      Position.Y = 495.000000000000000000
+      Size.Width = 364.000000000000000000
+      Size.Height = 44.000000000000000000
+      Size.PlatformDefault = False
+      TabOrder = 10
+      Text = '2.6  Restore provider'
+      OnClick = ButtonRestoreDefaultProviderClick
+    end
+    object ButtonEnterDefaultDemo: TButton
+      Align = Top
+      Margins.Left = 5.000000000000000000
+      Margins.Top = 5.000000000000000000
+      Margins.Right = 5.000000000000000000
+      Position.X = 5.000000000000000000
+      Position.Y = 544.000000000000000000
+      Size.Width = 364.000000000000000000
+      Size.Height = 44.000000000000000000
+      Size.PlatformDefault = False
+      TabOrder = 11
+      Text = '3.1  Enter '#8594' default button'
+      OnClick = ButtonEnterDefaultDemoClick
+    end
+    object ButtonEscCancelDemo: TButton
+      Align = Top
+      Margins.Left = 5.000000000000000000
+      Margins.Top = 5.000000000000000000
+      Margins.Right = 5.000000000000000000
+      Position.X = 5.000000000000000000
+      Position.Y = 593.000000000000000000
+      Size.Width = 364.000000000000000000
+      Size.Height = 44.000000000000000000
+      Size.PlatformDefault = False
+      TabOrder = 12
+      Text = '3.2  Esc '#8594' cancel button'
+      OnClick = ButtonEscCancelDemoClick
+    end
+    object ButtonEscWithoutCancelDemo: TButton
+      Align = Top
+      Margins.Left = 5.000000000000000000
+      Margins.Top = 5.000000000000000000
+      Margins.Right = 5.000000000000000000
+      Position.X = 5.000000000000000000
+      Position.Y = 642.000000000000000000
+      Size.Width = 364.000000000000000000
+      Size.Height = 44.000000000000000000
+      Size.PlatformDefault = False
+      TabOrder = 13
+      Text = '3.3  Esc/backdrop no-op'
+      OnClick = ButtonEscWithoutCancelDemoClick
+    end
+    object ButtonInvalidDefaultDemo: TButton
+      Align = Top
+      Margins.Left = 5.000000000000000000
+      Margins.Top = 5.000000000000000000
+      Margins.Right = 5.000000000000000000
+      Position.X = 5.000000000000000000
+      Position.Y = 691.000000000000000000
+      Size.Width = 364.000000000000000000
+      Size.Height = 44.000000000000000000
+      Size.PlatformDefault = False
+      TabOrder = 14
+      Text = '3.4  Invalid default'
+      OnClick = ButtonInvalidDefaultDemoClick
+    end
+    object ButtonAbortRetryIgnore: TButton
+      Align = Top
+      Margins.Left = 5.000000000000000000
+      Margins.Top = 5.000000000000000000
+      Margins.Right = 5.000000000000000000
+      Position.X = 5.000000000000000000
+      Position.Y = 740.000000000000000000
+      Size.Width = 364.000000000000000000
+      Size.Height = 44.000000000000000000
+      Size.PlatformDefault = False
+      TabOrder = 15
+      Text = '4.1  Abort / Retry / Ignore'
+      OnClick = ButtonAbortRetryIgnoreClick
+    end
+    object ButtonAllCancel: TButton
+      Align = Top
+      Margins.Left = 5.000000000000000000
+      Margins.Top = 5.000000000000000000
+      Margins.Right = 5.000000000000000000
+      Position.X = 5.000000000000000000
+      Position.Y = 789.000000000000000000
+      Size.Width = 364.000000000000000000
+      Size.Height = 44.000000000000000000
+      Size.PlatformDefault = False
+      TabOrder = 16
+      Text = '4.2  All / Cancel'
+      OnClick = ButtonAllCancelClick
+    end
+    object ButtonAllNoToAllYesToAll: TButton
+      Align = Top
+      Margins.Left = 5.000000000000000000
+      Margins.Top = 5.000000000000000000
+      Margins.Right = 5.000000000000000000
+      Position.X = 5.000000000000000000
+      Position.Y = 838.000000000000000000
+      Size.Width = 364.000000000000000000
+      Size.Height = 44.000000000000000000
+      Size.PlatformDefault = False
+      TabOrder = 17
+      Text = '4.3  All / NoToAll / YesToAll'
+      OnClick = ButtonAllNoToAllYesToAllClick
+    end
+    object ButtonHelpClose: TButton
+      Align = Top
+      Margins.Left = 5.000000000000000000
+      Margins.Top = 5.000000000000000000
+      Margins.Right = 5.000000000000000000
+      Position.X = 5.000000000000000000
+      Position.Y = 887.000000000000000000
+      Size.Width = 364.000000000000000000
+      Size.Height = 44.000000000000000000
+      Size.PlatformDefault = False
+      TabOrder = 18
+      Text = '4.4  Help / Close'
+      OnClick = ButtonHelpCloseClick
+    end
+    object ButtonIgnoreClose: TButton
+      Align = Top
+      Margins.Left = 5.000000000000000000
+      Margins.Top = 5.000000000000000000
+      Margins.Right = 5.000000000000000000
+      Position.X = 5.000000000000000000
+      Position.Y = 936.000000000000000000
+      Size.Width = 364.000000000000000000
+      Size.Height = 44.000000000000000000
+      Size.PlatformDefault = False
+      TabOrder = 19
+      Text = '4.5  Ignore / Close'
+      OnClick = ButtonIgnoreCloseClick
+    end
+    object ButtonQueueDemo: TButton
+      Align = Top
+      Margins.Left = 5.000000000000000000
+      Margins.Top = 5.000000000000000000
+      Margins.Right = 5.000000000000000000
+      Position.X = 5.000000000000000000
+      Position.Y = 985.000000000000000000
+      Size.Width = 364.000000000000000000
+      Size.Height = 44.000000000000000000
+      Size.PlatformDefault = False
+      TabOrder = 20
+      Text = '5.1  Queue burst'
+      OnClick = ButtonQueueDemoClick
+    end
+    object ButtonTestLongCancel: TButton
+      Align = Top
+      Margins.Left = 5.000000000000000000
+      Margins.Top = 5.000000000000000000
+      Margins.Right = 5.000000000000000000
+      Position.X = 5.000000000000000000
+      Position.Y = 1034.000000000000000000
+      Size.Width = 364.000000000000000000
+      Size.Height = 44.000000000000000000
+      Size.PlatformDefault = False
+      TabOrder = 21
+      Text = '5.2  Long message'
+      OnClick = ButtonTestLongCancelClick
+    end
+    object ButtonThemeSwapDemo: TButton
+      Align = Top
+      Margins.Left = 5.000000000000000000
+      Margins.Top = 5.000000000000000000
+      Margins.Right = 5.000000000000000000
+      Position.X = 5.000000000000000000
+      Position.Y = 1083.000000000000000000
+      Size.Width = 364.000000000000000000
+      Size.Height = 44.000000000000000000
+      Size.PlatformDefault = False
+      TabOrder = 22
+      Text = '5.3  Theme snapshot'
+      OnClick = ButtonThemeSwapDemoClick
+    end
+    object ButtonDecisionFlowDemo: TButton
+      Align = Top
+      Margins.Left = 5.000000000000000000
+      Margins.Top = 5.000000000000000000
+      Margins.Right = 5.000000000000000000
+      Position.X = 5.000000000000000000
+      Position.Y = 1132.000000000000000000
+      Size.Width = 364.000000000000000000
+      Size.Height = 44.000000000000000000
+      Size.PlatformDefault = False
+      TabOrder = 23
+      Text = '5.4  Sequential decision flow'
+      OnClick = ButtonDecisionFlowDemoClick
+    end
+    object ButtonDecisionFlowCustom: TButton
+      Align = Top
+      Margins.Left = 5.000000000000000000
+      Margins.Top = 5.000000000000000000
+      Margins.Right = 5.000000000000000000
+      Position.X = 5.000000000000000000
+      Position.Y = 1181.000000000000000000
+      Size.Width = 364.000000000000000000
+      Size.Height = 44.000000000000000000
+      Size.PlatformDefault = False
+      TabOrder = 24
+      Text = '5.5  Decision flow '#8212' custom'
+      OnClick = ButtonDecisionFlowCustomClick
+    end
+    object ButtonInjectedWorkflowDemo: TButton
+      Align = Top
+      Margins.Left = 5.000000000000000000
+      Margins.Top = 5.000000000000000000
+      Margins.Right = 5.000000000000000000
+      Position.X = 5.000000000000000000
+      Position.Y = 1230.000000000000000000
+      Size.Width = 364.000000000000000000
+      Size.Height = 44.000000000000000000
+      Size.PlatformDefault = False
+      TabOrder = 25
+      Text = '5.6  Business action'
+      OnClick = ButtonInjectedWorkflowDemoClick
+    end
+    object ButtonCloseProgrammatic: TButton
+      Align = Top
+      Margins.Left = 5.000000000000000000
+      Margins.Top = 5.000000000000000000
+      Margins.Right = 5.000000000000000000
+      Position.X = 5.000000000000000000
+      Position.Y = 1279.000000000000000000
+      Size.Width = 364.000000000000000000
+      Size.Height = 44.000000000000000000
+      Size.PlatformDefault = False
+      TabOrder = 26
+      Text = '6.1  Programmatic close'
+      OnClick = ButtonCloseProgrammaticClick
+    end
+    object ButtonDialogService4D: TButton
+      Align = Top
+      Margins.Left = 5.000000000000000000
+      Margins.Top = 5.000000000000000000
+      Margins.Right = 5.000000000000000000
+      Position.X = 5.000000000000000000
+      Position.Y = 1328.000000000000000000
+      Size.Width = 364.000000000000000000
+      Size.Height = 44.000000000000000000
+      Size.PlatformDefault = False
+      TabOrder = 27
+      Text = '7.1  DialogService4D facade'
+      OnClick = ButtonDialogService4DClick
+    end
+    object ButtonAwaitOnWorker: TButton
+      Align = Top
+      Margins.Left = 5.000000000000000000
+      Margins.Top = 5.000000000000000000
+      Margins.Right = 5.000000000000000000
+      Position.X = 5.000000000000000000
+      Position.Y = 1377.000000000000000000
+      Size.Width = 364.000000000000000000
+      Size.Height = 44.000000000000000000
+      Size.PlatformDefault = False
+      TabOrder = 28
+      Text = '8.1  Worker await'
+      OnClick = ButtonAwaitOnWorkerClick
+    end
+    object ButtonAWaitSmart: TButton
+      Align = Top
+      Margins.Left = 5.000000000000000000
+      Margins.Top = 5.000000000000000000
+      Margins.Right = 5.000000000000000000
+      Position.X = 5.000000000000000000
+      Position.Y = 1426.000000000000000000
+      Size.Width = 364.000000000000000000
+      Size.Height = 44.000000000000000000
+      Size.PlatformDefault = False
+      TabOrder = 29
+      Text = '8.2  Smart message'
+      OnClick = ButtonAWaitSmartClick
+    end
+    object ButtonAwaitSmartCallbackOnMain: TButton
+      Align = Top
+      Margins.Left = 5.000000000000000000
+      Margins.Top = 5.000000000000000000
+      Margins.Right = 5.000000000000000000
+      Position.X = 5.000000000000000000
+      Position.Y = 1475.000000000000000000
+      Size.Width = 364.000000000000000000
+      Size.Height = 44.000000000000000000
+      Size.PlatformDefault = False
+      TabOrder = 30
+      Text = '8.3  Callback on main'
+      OnClick = ButtonAwaitSmartCallbackOnMainClick
+    end
+    object ButtonAwaitTimeout: TButton
+      Align = Top
+      Margins.Left = 5.000000000000000000
+      Margins.Top = 5.000000000000000000
+      Margins.Right = 5.000000000000000000
+      Position.X = 5.000000000000000000
+      Position.Y = 1524.000000000000000000
+      Size.Width = 364.000000000000000000
+      Size.Height = 44.000000000000000000
+      Size.PlatformDefault = False
+      TabOrder = 31
+      Text = '8.4  Worker timeout'
+      OnClick = ButtonAwaitTimeoutClick
+    end
+    object ButtonAwaitErrorOnMainThread: TButton
+      Align = Top
+      Margins.Left = 5.000000000000000000
+      Margins.Top = 5.000000000000000000
+      Margins.Right = 5.000000000000000000
+      Position.X = 5.000000000000000000
+      Position.Y = 1573.000000000000000000
+      Size.Width = 364.000000000000000000
+      Size.Height = 44.000000000000000000
+      Size.PlatformDefault = False
+      TabOrder = 32
+      Text = '8.5  Intentional await error'
+      OnClick = ButtonAwaitErrorOnMainThreadClick
+    end
+    object ButtonDialogServiceSyncRealityCheck: TButton
+      Align = Top
+      Margins.Left = 5.000000000000000000
+      Margins.Top = 5.000000000000000000
+      Margins.Right = 5.000000000000000000
+      Margins.Bottom = 5.000000000000000000
+      Position.X = 5.000000000000000000
+      Position.Y = 1622.000000000000000000
+      Size.Width = 364.000000000000000000
+      Size.Height = 44.000000000000000000
+      Size.PlatformDefault = False
+      TabOrder = 33
+      Text = '9.1  FMX.DialogService comparison'
+      OnClick = ButtonDialogServiceSyncRealityCheckClick
+    end
+    object ButtonCustomSimple: TButton
+      Align = Top
+      Margins.Left = 5.000000000000000000
+      Margins.Right = 5.000000000000000000
+      Margins.Bottom = 5.000000000000000000
+      Position.X = 5.000000000000000000
+      Position.Y = 1671.000000000000000000
+      Size.Width = 364.000000000000000000
+      Size.Height = 44.000000000000000000
+      Size.PlatformDefault = False
+      TabOrder = 34
+      Text = '10.1  Custom buttons'
+      OnClick = ButtonCustomSimpleClick
+    end
+    object ButtonCustomDestructive: TButton
+      Align = Top
+      Margins.Left = 5.000000000000000000
+      Margins.Right = 5.000000000000000000
+      Margins.Bottom = 5.000000000000000000
+      Position.X = 5.000000000000000000
+      Position.Y = 1720.000000000000000000
+      Size.Width = 364.000000000000000000
+      Size.Height = 44.000000000000000000
+      Size.PlatformDefault = False
+      TabOrder = 35
+      Text = '10.2  Destructive button'
+      OnClick = ButtonCustomDestructiveClick
+    end
+    object ButtonCustomAllRoles: TButton
+      Align = Top
+      Margins.Left = 5.000000000000000000
+      Margins.Right = 5.000000000000000000
+      Margins.Bottom = 5.000000000000000000
+      Position.X = 5.000000000000000000
+      Position.Y = 1769.000000000000000000
+      Size.Width = 364.000000000000000000
+      Size.Height = 44.000000000000000000
+      Size.PlatformDefault = False
+      TabOrder = 36
+      Text = '10.3  Custom roles'
+      OnClick = ButtonCustomAllRolesClick
+    end
+    object ButtonCustomSessionExpiry: TButton
+      Align = Top
+      Margins.Left = 5.000000000000000000
+      Margins.Right = 5.000000000000000000
+      Margins.Bottom = 5.000000000000000000
+      Position.X = 5.000000000000000000
+      Position.Y = 1818.000000000000000000
+      Size.Width = 364.000000000000000000
+      Size.Height = 44.000000000000000000
+      Size.PlatformDefault = False
+      TabOrder = 37
+      Text = '10.4  Session example'
+      OnClick = ButtonCustomSessionExpiryClick
+    end
+    object ButtonCustomAwaitWorker: TButton
+      Align = Top
+      Margins.Left = 5.000000000000000000
+      Margins.Right = 5.000000000000000000
+      Margins.Bottom = 5.000000000000000000
+      Position.X = 5.000000000000000000
+      Position.Y = 1867.000000000000000000
+      Size.Width = 364.000000000000000000
+      Size.Height = 44.000000000000000000
+      Size.PlatformDefault = False
+      TabOrder = 38
+      Text = '10.5  Custom worker await'
+      OnClick = ButtonCustomAwaitWorkerClick
+    end
+  end
+  object ButtonTelemetryEnable: TButton
+    Align = Top
+    Margins.Left = 8.000000000000000000
+    Margins.Top = 10.000000000000000000
+    Margins.Right = 8.000000000000000000
+    Position.X = 8.000000000000000000
+    Position.Y = 520.000000000000000000
+    Size.Width = 384.000000000000000000
+    Size.Height = 44.000000000000000000
+    Size.PlatformDefault = False
+    TabOrder = 7
+    Text = '2.7  Telemetry: OFF  (click to enable)'
+    OnClick = ButtonTelemetryEnableClick
+  end
+end

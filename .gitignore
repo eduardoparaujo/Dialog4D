@@ -1,0 +1,104 @@
+# ============================================================
+#  SafeThread4D — .gitignore
+#  Delphi FMX project — all platforms
+# ============================================================
+
+# ------------------------------------------------------------
+# Delphi compiler output
+# ------------------------------------------------------------
+*.dcu
+*.dcp
+*.dcpil
+*.dres
+*.drc
+*.map
+*.rsm
+*.tds
+*.o
+*.a
+*.dylib
+
+# ------------------------------------------------------------
+# Executables and libraries
+# ------------------------------------------------------------
+*.exe
+*.dll
+*.bpl
+*.lib
+*.so
+*.apk
+*.aab
+*.ipa
+
+# ------------------------------------------------------------
+# IDE metadata and history
+# ------------------------------------------------------------
+__history/
+__recovery/
+*.identcache
+*.tvsconfig
+*.local
+*.stat
+*.dsk
+*.~*
+~$*
+
+# ------------------------------------------------------------
+# Project options (user-specific, not shared)
+# ------------------------------------------------------------
+*.cfg
+*.dproj.local
+*.cbproj.local
+*.groupproj.local
+*.dpk.local
+
+# ------------------------------------------------------------
+# Build output folders — all target platforms
+# ------------------------------------------------------------
+Win32/
+Win64/
+Win64x/
+Android/
+Android64/
+iOSDevice32/
+iOSDevice64/
+iOSSimulator/
+iOSSimARM64/
+OSX32/
+OSX64/
+OSXARM64/
+Linux64/
+Debug/
+Release/
+
+# ------------------------------------------------------------
+# Signing keys (NEVER commit private keys)
+# ------------------------------------------------------------
+*.keystore
+*.jks
+android.keystore
+
+# ------------------------------------------------------------
+# Documentation build output
+# ------------------------------------------------------------
+doc/output/
+
+# ------------------------------------------------------------
+# OS noise
+# ------------------------------------------------------------
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+.Spotlight-V100
+.Trashes
+
+# Windows
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+
+# Linux
+*~

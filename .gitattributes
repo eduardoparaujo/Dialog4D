@@ -1,0 +1,26 @@
+# Normalize text files in the repository
+* text=auto
+
+# Documentation and config files should use LF
+*.md text eol=lf
+*.yml text eol=lf
+*.yaml text eol=lf
+*.json text eol=lf
+*.txt text eol=lf
+
+# Delphi source/project files can use CRLF on Windows checkout
+*.pas text eol=crlf
+*.dpr text eol=crlf
+*.dproj text eol=crlf
+*.inc text eol=crlf
+*.fmx text eol=crlf
+
+# Binary files
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.res binary
+*.pdf binary
+*.zip binary
