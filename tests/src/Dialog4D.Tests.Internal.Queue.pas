@@ -12,20 +12,35 @@
              - queued procedures are eventually executed
              - nil procedures are safely ignored
              - queued calls preserve submission order
+             - calls made from the main thread are not executed inline
 
            These tests exercise the public observable behavior of the helper.
            They do not attempt to inspect the internal wrapper implementation.
+
+  Part of the Dialog4D automated test suite.
+
+  Author        : Eduardo P. Araujo
+  Created       : 2026-04-26
+  Last modified : 2026-05-01
+  Version       : 1.0.1
 
   Notes:
     - Uses Dialog4D.Tests.Support.WaitUntil to pump the main thread and wait
       deterministically for queued work to execute.
     - Timing values are intentionally conservative to reduce flakiness in
       slower local or CI environments.
+    - The inline-execution test protects the intended TThread.ForceQueue
+      behavior: even when called from the main thread, the procedure must
+      execute asynchronously after the queue is pumped.
 
-  Author        : Eduardo P. Araujo
-  Created       : 2026-04-26
-  Last modified : 2026-04-26
-  Version       : 1.0.0
+  History:
+    1.0.1 — 2026-05-01 — Queue dispatch regression coverage.
+      • Added QueueOnMainThread_CalledFromMainThread_DoesNotExecuteInline
+        to protect the asynchronous ForceQueue contract introduced in
+        Dialog4D.Internal.Queue 1.0.1.
+
+    1.0.0 — 2026-04-26 — Initial public release.
+      • Added tests for queued execution, nil handling, and execution order.
 *}
 
 unit Dialog4D.Tests.Internal.Queue;
@@ -47,6 +62,9 @@ type
 
     [Test]
     procedure QueueOnMainThread_PreservesExecutionOrder;
+
+    [Test]
+    procedure QueueOnMainThread_CalledFromMainThread_DoesNotExecuteInline;
   end;
 
 implementation
@@ -124,6 +142,37 @@ begin
       10
     ),
     'Queued procedures were not executed in the expected order.'
+  );
+end;
+
+procedure TDialog4DInternalQueueTests.QueueOnMainThread_CalledFromMainThread_DoesNotExecuteInline;
+var
+  LExecuted: Boolean;
+begin
+  LExecuted := False;
+
+  QueueOnMainThread(
+    procedure
+    begin
+      LExecuted := True;
+    end
+  );
+
+  Assert.IsFalse(
+    LExecuted,
+    'QueueOnMainThread executed inline. Expected asynchronous ForceQueue behavior.'
+  );
+
+  Assert.IsTrue(
+    TDialog4DTestSupport.WaitUntil(
+      function: Boolean
+      begin
+        Result := LExecuted;
+      end,
+      2000,
+      10
+    ),
+    'The queued procedure was not executed after pumping the main thread.'
   );
 end;
 

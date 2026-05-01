@@ -9,12 +9,12 @@
            used when no custom text provider has been registered via
            TDialog4D.ConfigureTextProvider.
 
-  Part of the Dialog4D framework - see Dialog4D.Types for the overview.
+  Part of the Dialog4D default text-provider layer.
 
   Author        : Eduardo P. Araujo
   Created       : 2026-04-26
-  Last modified : 2026-04-26
-  Version       : 1.0.0
+  Last modified : 2026-05-01
+  Version       : 1.0.1
 
   Notes:
     - This unit is intentionally simple and predictable. It serves as the
@@ -22,20 +22,40 @@
       complemented by custom i18n providers.
 
     - Behavior:
-        * ButtonText covers all 12 TMsgDlgBtn values with English captions.
-        * An unrecognized button value falls back to the literal string
-          'Button' — a defensive fallback that should never trigger in
-          practice.
-        * TitleForType returns localized titles for mtInformation,
+        • ButtonText covers all current TMsgDlgBtn values with English
+          captions.
+        • An unrecognized button value falls back to the literal string
+          'Button' — a defensive fallback for future or unexpected enum
+          values.
+        • TitleForType returns default English titles for mtInformation,
           mtWarning, mtError and mtConfirmation.
-        * mtCustom intentionally returns an empty string so the caller can
+        • mtCustom intentionally returns an empty string so the caller can
           supply an explicit title or show no title at all.
-        * An unknown TMsgDlgType also returns an empty string.
+        • An unknown TMsgDlgType also returns an empty string.
 
   Important:
     - The provider is registered automatically as the global default in the
-      TDialog4D class constructor and can be replaced at any time via
-      TDialog4D.ConfigureTextProvider.
+      TDialog4D class constructor.
+
+    - Applications may replace it via TDialog4D.ConfigureTextProvider,
+      preferably during application initialization or another controlled
+      configuration point. Dialog requests capture the provider reference at
+      request time.
+
+    - This unit contains no mutable state of its own. It only maps enum
+      values to strings.
+
+  History:
+    1.0.1 — 2026-05-01 — Documentation contract clarification.
+      • Clarified that this provider is a stateless default English mapping.
+      • Reworded provider replacement notes to align with Dialog4D's request
+        snapshot model and controlled global-configuration guidance.
+      • No behavioral code changes.
+
+    1.0.0 — 2026-04-26 — Initial public release.
+      • Added default English captions for standard TMsgDlgBtn values.
+      • Added default English titles for standard TMsgDlgType values.
+      • Kept mtCustom title intentionally empty.
 *}
 
 unit Dialog4D.TextProvider.Default;
@@ -57,12 +77,22 @@ type
   /// <c>IDialog4DTextProvider</c> is configured.
   /// </summary>
   /// <remarks>
-  /// <para>• Provides English captions for all standard <c>TMsgDlgBtn</c> values.</para>
-  /// <para>• Provides English titles for the four built-in dialog types (<c>mtInformation</c>, <c>mtWarning</c>, <c>mtError</c>, <c>mtConfirmation</c>).</para>
-  /// <para>• <c>mtCustom</c> intentionally returns an empty title so the caller can provide an explicit title or show no title at all.</para>
   /// <para>
-  /// This provider is deliberately simple and predictable, serving as the
-  /// baseline text behavior for <c>Dialog4D</c>.
+  /// • Provides English captions for all current standard
+  /// <c>TMsgDlgBtn</c> values.
+  /// </para>
+  /// <para>
+  /// • Provides English titles for the four built-in dialog types:
+  /// <c>mtInformation</c>, <c>mtWarning</c>, <c>mtError</c> and
+  /// <c>mtConfirmation</c>.
+  /// </para>
+  /// <para>
+  /// • <c>mtCustom</c> intentionally returns an empty title so the caller can
+  /// provide an explicit title or show no title at all.
+  /// </para>
+  /// <para>
+  /// This provider is stateless and deliberately simple, serving as the
+  /// baseline English text behavior for <c>Dialog4D</c>.
   /// </para>
   /// </remarks>
   TDialog4DDefaultTextProvider = class(TInterfacedObject, IDialog4DTextProvider)
@@ -127,8 +157,7 @@ begin
     TMsgDlgBtn.mbClose:
       Result := 'Close';
   else
-    // Defensive fallback for unexpected values — should not occur in
-    // practice because all current TMsgDlgBtn values are covered above.
+    // Defensive fallback for unexpected/future values.
     Result := 'Button';
   end;
 end;
@@ -154,3 +183,4 @@ begin
 end;
 
 end.
+

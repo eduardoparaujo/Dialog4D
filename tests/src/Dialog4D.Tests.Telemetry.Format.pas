@@ -9,22 +9,41 @@
            This fixture verifies the public text-formatting contract exposed by
            TDialog4DTelemetryFormat, including:
              - enum/value to text conversion helpers
-             - formatting of a complete telemetry record into a single-line log entry
+             - formatting of a complete telemetry record into a single-line log
+               entry
              - fallback behavior for missing title and missing button caption
+             - quote escaping in quoted text fields
+             - CR/LF/TAB normalization to preserve single-line log output
 
            These tests focus on stable textual output that external logging,
            diagnostics, and demos may depend on.
+
+  Part of the Dialog4D automated test suite.
+
+  Author        : Eduardo P. Araujo
+  Created       : 2026-04-26
+  Last modified : 2026-05-01
+  Version       : 1.0.1
 
   Notes:
     - The fixture uses a small test text provider to validate provider-based
       title fallback behavior.
     - Assertions are intentionally granular so formatting regressions are easier
       to identify.
+    - Text escaping tests protect the 1.0.1 formatter hardening: Title,
+      ButtonCaption and ErrorMessage must use the same escaping and
+      single-line normalization rules.
 
-  Author        : Eduardo P. Araujo
-  Created       : 2026-04-26
-  Last modified : 2026-04-26
-  Version       : 1.0.0
+  History:
+    1.0.1 — 2026-05-01 — Formatter hardening coverage.
+      • Added tests for quote escaping in Title, ButtonCaption and ErrorMessage.
+      • Added tests for CR/LF/TAB normalization to visible escape sequences.
+      • Added assertions that formatted telemetry remains a single physical line.
+
+    1.0.0 — 2026-04-26 — Initial public release.
+      • Added enum/value conversion tests.
+      • Added complete telemetry formatting tests.
+      • Added fallback tests for missing title and missing button caption.
 *}
 
 unit Dialog4D.Tests.Telemetry.Format;
@@ -71,12 +90,16 @@ type
 
     [Test] procedure FormatTelemetry_UsesProviderTitleWhenTitleEmpty;
     [Test] procedure FormatTelemetry_UsesDashWhenButtonCaptionEmpty;
+
+    [Test] procedure FormatTelemetry_EscapesQuotesInTextFields;
+    [Test] procedure FormatTelemetry_NormalizesControlCharactersToSingleLine;
   end;
 
 implementation
 
 uses
   System.UITypes,
+
   Dialog4D.Telemetry.Format;
 
 type
@@ -337,6 +360,86 @@ begin
     'ButtonCaption="-"',
     LText,
     'When ButtonCaption is empty, the formatter should use "-".'
+  );
+end;
+
+procedure TDialog4DTelemetryFormatTests.FormatTelemetry_EscapesQuotesInTextFields;
+var
+  LTelemetry: TDialog4DTelemetry;
+  LText: string;
+begin
+  LTelemetry := CreateBasicTelemetry;
+  LTelemetry.Title := 'Title "A"';
+  LTelemetry.ButtonCaption := 'Button "B"';
+  LTelemetry.ErrorMessage := 'Error "C"';
+
+  LText := TDialog4DTelemetryFormat.FormatTelemetry(LTelemetry);
+
+  AssertContains(
+    'Title="Title ""A"""',
+    LText,
+    'Title quotes were not escaped correctly.'
+  );
+
+  AssertContains(
+    'ButtonCaption="Button ""B"""',
+    LText,
+    'ButtonCaption quotes were not escaped correctly.'
+  );
+
+  AssertContains(
+    'Error="Error ""C"""',
+    LText,
+    'ErrorMessage quotes were not escaped correctly.'
+  );
+end;
+
+procedure TDialog4DTelemetryFormatTests.FormatTelemetry_NormalizesControlCharactersToSingleLine;
+var
+  LTelemetry: TDialog4DTelemetry;
+  LText: string;
+begin
+  LTelemetry := CreateBasicTelemetry;
+  LTelemetry.Title := 'Line1' + #13 + #10 + 'Line2';
+  LTelemetry.ButtonCaption := 'Button' + #9 + 'Caption';
+  LTelemetry.ErrorMessage := 'A' + #13 + 'B' + #10 + 'C' + #9 + 'D';
+
+  LText := TDialog4DTelemetryFormat.FormatTelemetry(LTelemetry);
+
+  AssertContains(
+    'Title="Line1\r\nLine2"',
+    LText,
+    'Title CR/LF characters were not normalized.'
+  );
+
+  AssertContains(
+    'ButtonCaption="Button\tCaption"',
+    LText,
+    'ButtonCaption TAB character was not normalized.'
+  );
+
+  AssertContains(
+    'Error="A\rB\nC\tD"',
+    LText,
+    'ErrorMessage control characters were not normalized.'
+  );
+
+  Assert.AreEqual(
+    0,
+    Pos(#13, LText),
+    'Formatted telemetry contains a physical carriage return.'
+  );
+
+  Assert.AreEqual(
+    0,
+    Pos(#10, LText),
+    'Formatted telemetry contains a physical line feed.'
+  );
+
+  Assert.AreEqual(
+    0,
+    Pos(#9, LText),
+    'Formatted telemetry contains a physical tab.'
   );
 end;
 

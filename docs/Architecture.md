@@ -1,10 +1,25 @@
 # Dialog4D Architecture
 
-**Version:** 1.0.0
+**Version:** 1.0.1 — 2026-05-01
 
-Dialog4D is not just an asynchronous wrapper around `FMX.DialogService`. It is a small execution machine with explicit roles, state transitions, publication rules, and lifecycle boundaries that govern how a dialog moves from a public API call to a visible overlay and back to a clean teardown.
+Dialog4D is an FMX-rendered asynchronous dialog library with explicit roles,
+state transitions, request snapshots, per-form queueing, and lifecycle
+boundaries.
 
-This document complements the README by showing the mechanism as a whole: who owns what, which thread executes each step, how requests are queued and serialized per form, when configuration is captured, how close paths differ, and how form destruction is handled safely.
+Dialog4D does not redefine the role of `FMX.DialogService`. FireMonkey's
+built-in dialog service remains appropriate for applications that want the
+standard platform-oriented dialog behavior provided by FMX.
+
+The purpose of Dialog4D is to make a specific set of dialog concerns easier to
+handle in FMX applications: themed FMX overlays, per-form request
+serialization, request-time configuration snapshots, structured telemetry, and
+explicit asynchronous decision flow.
+
+This document complements the README by describing the mechanism from the
+inside: who owns what, which thread executes each step, how requests are queued
+per form, when configuration is captured, how close paths differ, how form
+destruction is handled, and how the worker-thread await layer fits into the
+overall pipeline.
 
 ---
 
@@ -20,6 +35,11 @@ flowchart LR
         G[Class vars<br/>FTheme<br/>FTextProvider<br/>FTelemetry]
     end
 
+    subgraph Req["Request snapshot"]
+        direction TB
+        R[TDialog4DRequest<br/>theme copy<br/>provider reference<br/>telemetry sink<br/>callback<br/>button definitions]
+    end
+
     subgraph Reg["Registry (TDialog4DRegistry)"]
         direction TB
         M[FMap<br/>Form -> FormState]
@@ -30,55 +50,99 @@ flowchart LR
         direction TB
         Q[Queue<br/>FIFO of requests]
         A[Active flag]
+        OD[OwnerDestroying flag]
         AR[ActiveRequest]
         AH[ActiveHost]
-        H[Hook reference]
+        RH[Registry form hook]
     end
 
-    R[TDialog4DRequest<br/>Immutable snapshot]
     Host[TDialog4DHostFMX<br/>Visual host]
-    Hook[TDialog4DFormHook<br/>Owned by parent form]
+    HH[Host form hook<br/>owned by parent form]
     UI[UI / Main Thread]
+    Await[TDialog4DAwait<br/>Worker-thread await helper]
+    Worker[Worker thread]
 
     U -->|MessageDialogAsync| F
     U -->|CloseDialog| F
-    F -->|read snapshot| G
-    F -->|build| R
-    F -->|QueueOnMainThread| UI
+    F -->|capture snapshot| G
+    F -->|build request| R
+    F -->|main-thread execution path| UI
     UI -->|EnqueueOrShow| Reg
 
-    Reg -->|under FCrit| FormState
-    Reg -->|create on first request| Hook
+    Reg -->|under<br/>FCrit| FormState
+    Reg -->|create on <br/>first request| RH
 
     FormState -->|publish active| AH
-    FormState -->|create + ShowDialog| Host
+    FormState -->|dispatch request| Host
 
-    Host -->|render overlay on| UI
+    Host -->|owns FMX overlay| UI
     Host -->|user interaction| UI
-    Host -->|close callback| UI
-    Host -->|emit telemetry events| G
+    Host -->|internal close callback| F
+    Host -->|telemetry sink from request| R
+    Host -->|create while active| HH
 
-    UI -->|callback finished| Reg
+    UI -->|user callback + cleanup chain| Reg
     Reg -->|drain next request| Host
 
-    Hook -.->|on form destroy<br/>QueueOnMainThread| Reg
-    Reg -->|OnFormDestroyed<br/>discard queue + state| FormState
+    RH -.->|on form destroy<br/>queued registry cleanup| Reg
+    HH -.->|on form destroy<br/>owner-destroying host cleanup| Host
+
+    Worker -->|MessageDialogOnWorker| Await
+    Await -->|queue show request| UI
+    Await -->|wait on event| Worker
+    Host -->|signal result/status| Await
 ```
 
 ### Reading the map
 
-- **Caller**: form, view model, or other owner that calls `TDialog4D.MessageDialogAsync` or `TDialog4D.CloseDialog`. The caller may be on any thread.
-- **Public facade** (`TDialog4D`): receives requests, reads the global theme/provider snapshot, builds a `TDialog4DRequest`, and marshals work to the main thread. Holds three class vars (`FTheme`, `FTextProvider`, `FTelemetry`) — the global configuration surface.
-- **Registry** (`TDialog4DRegistry`): process-wide singleton that maps each parent form to its `TDialog4DFormState`. Coordinates the per-form FIFO queue under a single `TCriticalSection`.
-- **TDialog4DFormState**: per-form runtime state. Holds the FIFO queue of pending requests, the currently active request and host pointers, and a reference to the form hook.
-- **TDialog4DRequest**: immutable snapshot built at call time. Captures every parameter — message, dialog type, buttons, callback, title, parent form, cancelable flag — plus a copy of the active theme and a reference to the active text provider.
-- **Visual host** (`TDialog4DHostFMX`): one instance per visible dialog. Owns the FMX visual tree, the open/close animations, the input handlers, and the close pipeline. Created when a request is dispatched, destroyed after cleanup and callback processing complete.
-- **Form hook** (`TDialog4DFormHook`): a `TComponent` owned by the parent form. Created lazily when the form's first request enters the registry. When the form is destroyed (and consequently its owned components), the hook's destructor schedules `OnFormDestroyed` on the main thread.
-- **UI / Main Thread**: every visual operation, every user callback, and every state mutation on `FCrit`-protected fields runs here. Public API calls from worker threads are marshalled through `QueueOnMainThread` before any FMX work happens.
+- **Caller**: form, view model, or worker code that calls
+  `TDialog4D.MessageDialogAsync` or `TDialog4D.CloseDialog`.
+
+- **Public facade** (`TDialog4D`): receives requests, validates input, captures
+  request-time configuration, resolves the parent form on the main-thread
+  execution path, emits `tkShowRequested`, and hands the request to the
+  registry.
+
+- **Global configuration**: `FTheme`, `FTextProvider`, and `FTelemetry` are the
+  global configuration surface. They are intended to be configured during
+  application initialization or another controlled configuration point, not as
+  high-frequency concurrent mutation APIs.
+
+- **Request snapshot** (`TDialog4DRequest`): captures the data needed to show
+  one dialog. `TDialog4DTheme` is copied by value. The text provider,
+  telemetry sink, and callback are captured as references/procedure values.
+  Custom button arrays are copied so later caller-side mutations do not affect
+  an already requested dialog.
+
+- **Registry** (`TDialog4DRegistry`): process-wide coordinator that maps each
+  parent form to a `TDialog4DFormState`. It serializes requests per form using
+  a FIFO queue guarded by a `TCriticalSection`.
+
+- **Per-form state** (`TDialog4DFormState`): holds the pending FIFO queue, the
+  active request and active host pointers, the owner-destroying flag, and the
+  registry-facing form hook.
+
+- **Visual host** (`TDialog4DHostFMX`): one instance per visible dialog. It owns
+  the FMX overlay, visual tree, input handling, layout recalculation,
+  animation path, close pipeline, and per-instance telemetry emission.
+
+- **Form hooks**: there are two distinct hook responsibilities:
+  - the registry hook marks the per-form state as owner-destroying and then
+    schedules registry cleanup when the parent form is destroyed;
+  - the host hook handles owner-destroying cleanup for the active visual host.
+
+- **Await layer** (`TDialog4DAwait`): optional worker-thread helper built on top
+  of `TDialog4D.MessageDialogAsync`. It gives worker code blocking wait
+  semantics without turning the main-thread UI pipeline into a synchronous
+  dialog model.
+
+- **UI / main thread**: all FMX visual work happens on the main thread. Calls
+  made from worker threads are marshalled before the registry or visual host
+  touches FMX state.
 
 ---
 
-## 2. Main flow: from call to callback
+## 2. Main flow: from request to result callback
 
 ```mermaid
 sequenceDiagram
@@ -89,64 +153,77 @@ sequenceDiagram
     participant Registry as TDialog4DRegistry
     participant State as FormState
     participant Host as TDialog4DHostFMX
-    participant User as User callback
+    participant App as Application callback
 
     Caller->>Facade: MessageDialogAsync(...)
-    Facade->>Facade: ResolveParentForm<br/>validate buttons<br/>resolve text provider
-    Facade->>Facade: build TDialog4DRequest<br/>(captures FTheme + FTextProvider snapshot)
+    Facade->>Facade: validate thread-independent input
+    Facade->>Facade: capture theme/provider/telemetry/callback/buttons
 
-    Facade->>UI: QueueOnMainThread(...)
+    alt caller is worker thread
+        Facade->>UI: QueueOnMainThread(main-thread handoff)
+    else caller is main thread
+        Facade->>UI: run main-thread handoff directly
+    end
 
-    Note over UI: Thread boundary —<br/>the rest runs on the main thread.
-
-    UI->>Facade: emit tkShowRequested telemetry
-    UI->>Registry: EnqueueOrShow(LRequest)
+    UI->>Facade: ResolveParentForm(...)
+    UI->>Facade: build TDialog4DRequest
+    UI->>Facade: emit tkShowRequested
+    UI->>Registry: EnqueueOrShow(request)
 
     Registry->>Registry: FCrit.Acquire
     Registry->>State: GetOrCreateStateLocked(form)
-    Registry->>State: create Hook on first request
-    alt FormState.Active = False
+    alt State.Active = False
         Registry->>State: Active := True
         Registry->>Registry: FCrit.Release
-        Registry->>Host: ShowRequestOnUI(LRequest)
-    else FormState.Active = True
-        Registry->>State: Queue.Enqueue(LRequest)
+        Registry->>Host: ShowRequestOnUI(request)
+    else State.Active = True
+        Registry->>State: Queue.Enqueue(request)
         Registry->>Registry: FCrit.Release
-        Note over Registry: Returns immediately.<br/>Will be dispatched later<br/>by OnDialogFinished.
+        Note over Registry: Request returns to the caller.<br/>It will be shown later.
     end
 
-    Host->>Host: build button list (standard or custom path)
-    Host->>Host: resolve title (explicit or provider default)
-    Host->>State: under FCrit, publish ActiveRequest + ActiveHost
-    Host->>Host: ShowDialog<br/>(build visual tree, open animation)
+    Host->>Host: build button list
+    Host->>Host: resolve title
+    Host->>State: publish ActiveRequest + ActiveHost under FCrit
+    Host->>Host: ShowDialog<br/>(build FMX tree, start/open)
 
-    Host->>UI: emit tkShowDisplayed telemetry
+    Host->>Facade: emit tkShowDisplayed
 
-    Note over Host: Dialog is now visible.<br/>Waiting for user input.
+    Note over Host: Dialog is visible.<br/>Waiting for user input.
 
-    Host->>Host: user interaction selects a result
+    Host->>Host: user interaction or programmatic close
     Host->>Host: CloseWithResult
-
     Host->>Host: disable hit-testing
     Host->>Host: store FClosingResult
-    Host->>Host: emit tkCloseRequested telemetry
-    Host->>Host: AnimateClose -> dgsClosing
+    Host->>Facade: emit tkCloseRequested
+    Host->>Host: close animation or deferred close path
 
-    Host->>UI: close callback queued / finished
-    UI->>UI: capture LProc/LRes/LReason BEFORE Cleanup
-    UI->>Host: emit tkClosed telemetry
-    UI->>Host: Cleanup (dispose visual tree, reset state)
+    Host->>Host: FinalizeCloseNow / FinalizeCloseAsync
+    Host->>Host: capture result and close reason
+    Host->>Facade: emit tkClosed
+    Host->>Facade: invoke internal close callback
+    Host->>Facade: emit tkCallbackInvoked / tkCallbackSuppressed
+    Host->>Host: Cleanup
 
-    UI->>State: under FCrit, clear ActiveRequest + ActiveHost
-    UI->>User: invoke OnResult(LRes) on main thread
-    UI->>Host: emit tkCallbackInvoked or tkCallbackSuppressed telemetry
-    UI->>Host: free host + free request
+    Facade->>UI: queue final application-callback cleanup chain
+    UI->>State: claim ActiveRequest + clear ActiveHost under FCrit
+    alt request claimed and owner is not destroying
+        UI->>App: invoke request OnResult on main thread
+    else request not claimed or owner destroying
+        UI->>UI: skip application callback
+    end
+    UI->>Host: free host after normal close
+    UI->>Facade: free request only if claimed
+    alt owner is not destroying
+        UI->>Registry: OnDialogFinished(form)
+    else owner destroying
+        UI->>UI: skip FIFO drain
+    end
 
-    UI->>Registry: OnDialogFinished(form)
     Registry->>Registry: FCrit.Acquire
     alt Queue.Count > 0
         Registry->>State: dequeue next request
-        Registry->>State: Active stays True
+        Registry->>State: Active := True
         Registry->>Registry: FCrit.Release
         Registry->>Host: ShowRequestOnUI(next)
     else Queue empty
@@ -157,50 +234,117 @@ sequenceDiagram
 
 ### What this means
 
-- `MessageDialogAsync` returns immediately. Even when called from the main thread, all visual work happens through `QueueOnMainThread` — this guarantees the call site never observes side effects from the dialog itself before the call returns.
-- The thread boundary is crossed exactly once per request, in `Facade -> UI` via `QueueOnMainThread`. After that, the entire pipeline stays on the main thread.
-- `tkShowRequested` is emitted **before** the registry decides whether to show or enqueue — so telemetry consumers can correlate the request with later `tkShowDisplayed` events even when there is queueing latency.
-- The publication of `ActiveRequest` and `ActiveHost` on the per-form state is what makes `TDialog4D.CloseDialog` work: a concurrent close call snapshots the host pointer under the same `FCrit` and then invokes `CloseProgram` outside the lock.
-- After the user callback runs, `OnDialogFinished` drains the next request from the FIFO. The `Active` flag is left `True` when there is a next request — this is intentional, so a concurrent `EnqueueOrShow` call goes straight to the queue rather than racing the dispatch.
+- `MessageDialogAsync` is asynchronous with respect to the user decision: it
+  never blocks waiting for the user to answer.
 
-### Cleanup ordering inside `FinalizeCloseNow`
+- If called from a worker thread, the registry handoff and all FMX work are
+  queued to the main thread. If called from the main thread, the handoff may run
+  immediately on the current stack. In both cases, the result is delivered later
+  through the callback pipeline.
 
-There is a subtle invariant inside the close callback that is worth highlighting:
+- `tkShowRequested` is emitted on the main-thread execution path before the
+  registry decides whether the request will be displayed immediately or queued
+  behind an existing active dialog.
 
-```text
-1. Capture LProc, LRes, LReason
-2. Emit tkClosed telemetry
-3. Cleanup (resets FCloseReason and snapshot fields)
-4. State := dgsClosed
-5. Invoke user callback
-6. Emit tkCallbackInvoked or tkCallbackSuppressed telemetry
-```
+- `ActiveRequest` and `ActiveHost` are published under `FCrit`. This is what
+  lets `TDialog4D.CloseDialog` find the active host safely: it snapshots the
+  host pointer under the same lock, then invokes `CloseProgram` outside the
+  lock.
 
-The capture in step 1 must happen **before** Cleanup in step 3, because Cleanup resets `FCloseReason` and the snapshot fields to defaults. Without this capture-then-clean order, the user callback would receive a corrupted close reason and telemetry would lose context about why the dialog closed.
+- The visual host invokes an internal close callback supplied by the public
+  facade. The facade then queues the final application-callback cleanup chain
+  from a clean main-loop stack. Before invoking the application callback, that
+  queued chain claims `ActiveRequest` and `ActiveHost` under `FCrit`. If the
+  parent form entered owner-destroying cleanup first, the request may already
+  have been released by the form state and the queued chain skips the
+  application callback and request free path.
 
-### Ordering at close start
-
-`CloseWithResult` performs three immediate actions in this order:
-
-1. disables hit-testing across the overlay, backdrop, and card;
-2. stores `FClosingResult` and emits `tkCloseRequested`;
-3. enters the close-animation path through `AnimateClose`.
-
-The transition to `dgsClosing` happens inside `AnimateClose`, not before the `tkCloseRequested` emission. This ordering is intentional: the telemetry event records the close request at the point it is accepted, before animation-specific processing begins.
+- When one dialog finishes and the parent form is still valid for Dialog4D
+  processing, `OnDialogFinished` drains the next request from the per-form FIFO.
+  If a next request exists, `Active` is set back to `True` before the lock is
+  released so concurrent requests cannot race the dispatch. If the form state
+  is marked owner-destroying, FIFO draining is skipped and pending requests are
+  discarded by form-state cleanup.
 
 ---
 
-## 3. Alternate paths: how a dialog can close
+## 3. Close pipeline and callback semantics
+
+The close pipeline has two callback layers:
+
+1. **Internal close callback** — the callback passed by `Dialog4D.pas` to the
+   visual host. It is part of the Dialog4D infrastructure.
+2. **Application callback** — the `OnResult` callback originally supplied by the
+   caller.
+
+Telemetry event `tkCallbackInvoked` belongs to the Dialog4D close-callback
+pipeline. It should not be interpreted as a guarantee that arbitrary downstream
+application code completed successfully. The application callback is invoked by
+the public facade as part of the queued final cleanup chain.
+
+### Cleanup ordering
+
+The host finalization path keeps this ordering:
+
+```text
+1. Capture result and close reason
+2. Emit tkClosed telemetry
+3. Invoke or suppress the internal close callback
+4. Emit callback telemetry for the Dialog4D callback pipeline
+5. Cleanup visual state
+```
+
+The capture must happen before cleanup because cleanup resets state and snapshot
+fields. The telemetry emitted around finalization must still be able to report
+the effective close reason, result, title, message length, button count, and
+triggered-button metadata.
+
+The public facade then runs the final application callback and request cleanup
+from a queued main-thread callback.
+
+### Ownership claim in the final callback
+
+The queued final callback performs an ownership claim before touching the active
+request snapshot.
+
+Under `FCrit`, it checks whether the per-form state still owns the same
+`ActiveRequest` and `ActiveHost`. If so, it clears those fields and the queued
+callback becomes responsible for the final application callback, request free,
+host free, and FIFO drain decision.
+
+If the per-form state was already removed because the parent form entered
+destruction, the queued callback cannot claim the request. In that case it does
+not touch the request snapshot and does not invoke the application callback.
+
+This prevents the active request from being released by both the form-state
+destructor and the queued final callback in reentrant form-destruction
+scenarios.
+
+### Callback exceptions
+
+If the internal close callback raises, the host records the exception message in
+telemetry and swallows the exception. This protects the visual close pipeline
+from being left in a partial state.
+
+Application callback exceptions should be handled by the application when the
+callback performs domain-specific work. Dialog4D's design goal is to complete
+dialog cleanup predictably; it is not a substitute for application-level error
+handling.
+
+---
+
+## 4. Alternate paths: how a dialog can close
 
 ```mermaid
 flowchart TD
-    A[Dialog is dgsOpen or dgsOpening] --> B{What triggered the close?}
+    A[Dialog is opening or open] --> B{What triggered the close?}
 
-    B -->|User clicked a button| C[FCloseReason := crButton<br/>Capture button meta from TagObject]
-    B -->|User tapped the backdrop<br/>and dialog is cancelable<br/>and a cancel-like button exists| D[FCloseReason := crBackdrop<br/>Capture cancel button meta]
-    B -->|Enter key on desktop| E[FCloseReason := crKeyEnter<br/>Capture default button meta]
-    B -->|Esc key on desktop<br/>OR hardware Back on Android<br/>and dialog is cancelable| F[FCloseReason := crKeyEsc<br/>Capture cancel button meta]
-    B -->|TDialog4D.CloseDialog| G[FCloseReason := crProgrammatic<br/>Reset triggered button meta]
+    B -->|User clicked a button| C[crButton<br/>Capture button metadata]
+    B -->|Backdrop tap<br/>cancelable + cancel-like button| D[crBackdrop<br/>Capture cancel-like button metadata]
+    B -->|Enter key on desktop| E[crKeyEnter<br/>Capture default button metadata]
+    B -->|Esc key on desktop<br/>or Android Back| F[crKeyEsc<br/>Capture cancel-like button metadata]
+    B -->|TDialog4D.CloseDialog| G[crProgrammatic<br/>No triggered button metadata]
+    B -->|Parent form destroying| H[crOwnerDestroying<br/>Suppress application callback]
 
     C --> I[CloseWithResult]
     D --> I
@@ -208,142 +352,132 @@ flowchart TD
     F --> I
     G --> I
 
-    I --> I1[Disable hit-test on overlay<br/>backdrop, and card]
-    I1 --> I2[Store FClosingResult]
-    I2 --> I3[Emit tkCloseRequested telemetry]
-    I3 --> I4[AnimateClose]
-    I4 --> I5[FState := dgsClosing]
+    I --> I1[Disable hit-testing]
+    I1 --> I2[Store result]
+    I2 --> I3[Emit tkCloseRequested]
+    I3 --> I4[Animate or defer close]
+    I4 --> I5[Finalize close]
 
-    I5 --> J{Close finalization path}
-    J -->|Normal finalization| K[FinalizeCloseNow / FinalizeCloseAsync]
-    K --> K1[Capture LProc/LRes/LReason]
-    K1 --> K2[Emit tkClosed]
-    K2 --> K3[Cleanup]
-    K3 --> K4[FState := dgsClosed]
-
-    K4 --> L{User callback assigned?}
-    L -->|Yes| M[Invoke OnResult on main thread]
-    L -->|No| N[Emit tkCallbackSuppressed]
-
-    M --> O{Exception raised?}
-    O -->|No| P[Emit tkCallbackInvoked]
-    O -->|Yes| Q[Emit tkCallbackInvoked<br/>with ErrorMessage<br/>Exception is swallowed]
-
-    A --> R{Parent form destroying?}
-    R -->|Yes| S[Host hook calls NotifyOwnerDestroying]
-    S --> T[FOwnerDestroying := True<br/>FOnResult := nil<br/>FCloseReason := crOwnerDestroying]
-    T --> U[Emit tkOwnerDestroying]
-    U --> V[Host hook frees host]
-    V --> W[Cleanup runs through destructor path<br/>without normal callback execution]
+    H --> H1[NotifyOwnerDestroying]
+    H1 --> H2[Emit tkOwnerDestroying]
+    H2 --> H3[Finalize owner-destroying cleanup]
+    H3 --> H4[Suppress callbacks]
 ```
 
 ### Contract by close path
 
-- **`crButton`**: user clicked or tapped a button. The button rectangle's `TagObject` carries a `TDialog4DButtonMeta` instance, which is captured into the host before `CloseWithResult` runs. This is what allows telemetry to report the exact button kind, caption, and default flag.
-- **`crBackdrop`**: user tapped the backdrop while the dialog is `ACancelable = True` and a cancel-like button exists. The triggered-button metadata is captured from the cancel button's index, so telemetry reports the cancel button as the responsible action even though the user did not click it directly.
-- **`crKeyEnter`**: Enter key on Windows or macOS. Resolves to the first button with `IsDefault = True`, falling back to the first valid button if no explicit default is present.
-- **`crKeyEsc`**: Esc key on desktop, or the hardware Back button on Android. Resolves to the first cancel-like button. On Android, the back key is always consumed (`Key := 0`) before the cancel branch, which prevents the OS from interpreting the event as activity-level navigation.
-- **`crProgrammatic`**: `TDialog4D.CloseDialog` was called. The triggered-button metadata is reset because no button is responsible for this close.
-- **Owner-destroying path**: this is not a normal `CloseWithResult` path. The host-owned form hook calls `NotifyOwnerDestroying`, which suppresses the user callback and emits `tkOwnerDestroying`, and then the hook frees the host. The guaranteed telemetry event for this scenario is `tkOwnerDestroying`. If a normal close pipeline was already in flight, additional close telemetry may already have been emitted as part of that pipeline.
+- **`crButton`**: user clicked or tapped a rendered button. Metadata is captured
+  from the button's `TagObject`, allowing telemetry to report button kind,
+  caption, and default status.
 
-### Why the user callback runs **after** Cleanup
+- **`crBackdrop`**: user tapped the backdrop while `ACancelable = True` and a
+  cancel-like button exists. Telemetry uses the cancel-like button metadata
+  because that is the logical result associated with the backdrop action.
 
-The callback is invoked after the visual tree has been disposed of and `FState` has been set to `dgsClosed`. This is intentional: callbacks frequently start the next dialog, navigate to another screen, or destroy the parent form. Disposing of the visual tree first prevents the callback from interacting with a half-destroyed dialog. If the callback queues another dialog, that request enters the FIFO normally on the next main-thread cycle.
+- **`crKeyEnter`**: Enter key on desktop platforms. Resolves to the default
+  button. If the requested default is invalid, the normalized button list
+  promotes a valid fallback.
 
-### Why callback exceptions are swallowed
+- **`crKeyEsc`**: Esc key on desktop or hardware Back on Android. Resolves to a
+  cancel-like button when available and the dialog is cancelable. On Android,
+  the back key is consumed to prevent activity-level navigation from treating
+  the event as a screen back action while the dialog is active.
 
-If `OnResult` raises, the exception is swallowed and recorded in telemetry as `ErrorMessage` on the `tkCallbackInvoked` event. This is intentional: a faulty user callback must not leave the close pipeline in a partial state. The dialog has already been cleaned up by the time the callback runs, so there is nothing to roll back — the only safe action is to record the failure for diagnostics and continue.
+- **`crProgrammatic`**: `TDialog4D.CloseDialog` requested closure. No rendered
+  button caused this result, so triggered-button metadata is reset.
+
+- **`crOwnerDestroying`**: parent form destruction cancels the dialog context.
+  Application callbacks are suppressed. The owner-destroying path emits
+  `tkOwnerDestroying` and finalizes the host cleanup path without treating the
+  destruction as a normal user decision.
 
 ---
 
-## 4. State model
+## 5. State model
 
 ```mermaid
 stateDiagram-v2
     [*] --> dgsClosed
 
-    dgsClosed --> dgsOpening : ShowDialog called<br/>visual tree built<br/>open animation started
-    dgsOpening --> dgsOpen : open animation finished<br/>(or skipped on Android)<br/>tkShowDisplayed emitted
+    dgsClosed --> dgsOpening : ShowDialog called<br/>visual tree built
+    dgsOpening --> dgsOpen : open finished<br/>tkShowDisplayed
 
-    dgsOpen --> dgsClosing : CloseWithResult accepted<br/>AnimateClose entered
-    dgsOpening --> dgsClosing : CloseProgram during opening<br/>(rare but supported)
+    dgsOpen --> dgsClosing : CloseWithResult accepted
+    dgsOpening --> dgsClosing : programmatic close during opening
 
-    dgsClosing --> dgsClosed : close animation finished<br/>(or skipped on Android)<br/>FinalizeCloseNow<br/>or FinalizeCloseAsync
+    dgsClosing --> dgsClosed : finalization<br/>cleanup path
 
-    dgsClosed --> [*] : host freed by callback chain<br/>or owner-destroying hook path
+    dgsClosed --> [*] : host freed
 
     note right of dgsOpening
-      Hit-tests are enabled.
-      Overlay BringToFront.
-      Animation runs (desktop)
-      or is skipped (Android).
+      Overlay exists.
+      Open animation may run
+      or be skipped by platform path.
     end note
 
     note right of dgsOpen
       Dialog visible.
-      Keyboard handlers active.
-      Resize handler reentrancy-guarded.
+      Keyboard/back handlers active.
       ActiveRequest + ActiveHost
       published on per-form state.
     end note
 
     note right of dgsClosing
-      Hit-tests disabled across
-      overlay, backdrop, and card.
-      No new close can fire.
-      Animation runs (desktop)
-      or is skipped (Android).
+      Hit-tests disabled.
+      No second close should be accepted.
+      Finalization path is guarded.
     end note
 
     note right of dgsClosed
-      Visual tree disposed or abandoned
-      with owner destruction.
-      Cleanup completed.
-      Callback either invoked or suppressed.
+      Visual state cleaned.
+      Callback either invoked
+      or suppressed by lifecycle rules.
     end note
 ```
 
 ### Why hit-tests are disabled at close start
 
-The first action of `CloseWithResult` is to set `HitTest := False` on the overlay, backdrop, and card. This closes the window where a user could trigger a second close mid-animation: any tap or click during the close animation hits the overlay but is ignored, so the dialog cannot enter `CloseWithResult` twice for the same instance.
-
-Immediately after that, `CloseWithResult` stores `FClosingResult` and emits `tkCloseRequested`. The actual state transition to `dgsClosing` happens inside `AnimateClose`.
+The first action of `CloseWithResult` is to disable hit-testing on the overlay,
+backdrop, and card. This closes the window where a user could trigger a second
+close while the close animation or deferred finalization path is still running.
 
 ### Reentrancy guards
 
-There are three reentrancy guards on the visual host:
+The visual host uses main-thread reentrancy guards:
 
-- **`FFinalizing`** in `FinalizeCloseNow` — prevents a second pass even if a finish handler fires twice.
-- **`FHandlingResize`** in `OverlayResized` — prevents recursion when `RecalcLayoutHeights` triggers another resize indirectly.
-- **`FRebuildingButtons`** in `RebuildButtonsIfNeeded` — prevents a layout recalculation from triggering another button rebuild while one is already in flight.
+- `FFinalizing` prevents a second finalization pass.
+- `FHandlingResize` prevents recursive resize/layout recalculation.
+- `FRebuildingButtons` prevents nested button rebuilds during layout changes.
 
-These guards are flags, not locks. They run only on the main thread and protect against synchronous reentrancy from FMX layout callbacks.
+These are not cross-thread locks. They are main-thread reentrancy guards for
+FMX callbacks and layout behavior.
 
-### Android-specific state transitions
+### Android-specific behavior
 
-Two transitions behave differently on Android compared to desktop:
+Two visual-host paths are intentionally different on Android:
 
-1. **Open animation is skipped.** `AnimateOpen` sets `FOverlay.Opacity := 1` directly and calls `OnOpenFinished(nil)` synchronously.
-2. **Close finalization is deferred.** `OnCloseFinished` calls `FinalizeCloseAsync` instead of `FinalizeCloseNow`. The actual destruction is scheduled via `QueueOnMainThread` so the visual tree is not destroyed inline during touch or gesture processing.
+1. Opening may skip the desktop animation path.
+2. Close finalization is deferred to the main loop so the visual tree is not
+   destroyed inline during touch, gesture, or hardware-back processing.
 
 ---
 
-## 5. Per-form FIFO queue flow
+## 6. Per-form FIFO queue flow
 
 ```mermaid
 sequenceDiagram
     autonumber
-    participant Worker as Worker thread
+    participant Source as Caller(s)
     participant UI as Main Thread
     participant Registry as TDialog4DRegistry
     participant State as FormState
     participant Host as TDialog4DHostFMX
 
-    Note over Worker,Registry: Three concurrent calls to MessageDialogAsync<br/>for the same form, from a worker thread.
+    Note over Source,Registry: Multiple requests for the same form.
 
-    Worker->>UI: QueueOnMainThread(req1)
-    Worker->>UI: QueueOnMainThread(req2)
-    Worker->>UI: QueueOnMainThread(req3)
+    Source->>UI: main-thread handoff req1
+    Source->>UI: main-thread handoff req2
+    Source->>UI: main-thread handoff req3
 
     UI->>Registry: EnqueueOrShow(req1)
     Registry->>Registry: FCrit.Acquire
@@ -363,8 +497,7 @@ sequenceDiagram
 
     Note over Host: User answers req1.
 
-    Host->>UI: close callback for req1
-    UI->>UI: invoke OnResult, free host + request
+    Host->>UI: internal close callback
     UI->>Registry: OnDialogFinished
 
     Registry->>Registry: FCrit.Acquire
@@ -375,241 +508,309 @@ sequenceDiagram
     end
     Registry->>Registry: FCrit.Release
     Registry->>Host: ShowRequestOnUI(req2)
-
-    Note over Host: User answers req2.
-
-    Host->>UI: close callback for req2
-    UI->>Registry: OnDialogFinished
-
-    Registry->>Registry: FCrit.Acquire
-    Registry->>State: Active := False
-    Registry->>State: dequeue req3
-    Registry->>State: Active := True
-    Registry->>Registry: FCrit.Release
-    Registry->>Host: ShowRequestOnUI(req3)
-
-    Note over Host: User answers req3.<br/>Queue is now empty.
-
-    Host->>UI: close callback for req3
-    UI->>Registry: OnDialogFinished
-
-    Registry->>Registry: FCrit.Acquire
-    Registry->>State: Active := False
-    Registry->>Registry: FCrit.Release
 ```
 
-### Why the FIFO is per-form, not global
+### Why the FIFO is per-form
 
-Each parent form has its own `TDialog4DFormState`, which means dialogs targeting different forms run in parallel. A request for Form A does not block a request for Form B. Within a single form, requests are strictly serialized in arrival order.
+Each parent form has its own `TDialog4DFormState`, so dialogs targeting
+different forms do not block each other. Within one form, requests are serialized
+in arrival order.
 
-This matches user expectations in multi-window applications: a confirmation dialog on a child window does not freeze the main window's notifications, but two confirmations on the same window are presented one after the other.
+This matches multi-window UI expectations: unrelated windows can own unrelated
+dialog sequences, while one form does not display overlapping Dialog4D
+overlays.
 
 ### Lock discipline
 
-The registry uses a single `TCriticalSection` (`FCrit`) to guard:
+`FCrit` guards:
 
-- the `FMap` dictionary itself,
-- per-form `Active` flag,
-- per-form `Queue`,
-- per-form `ActiveRequest` and `ActiveHost` pointers.
+- the registry dictionary;
+- each per-form `Active` flag;
+- each per-form `OwnerDestroying` flag;
+- each per-form request queue;
+- `ActiveRequest` and `ActiveHost` publication.
 
-The lock is held only for short atomic operations: dictionary lookup, queue enqueue/dequeue, pointer publication. Any FMX operation, any visual tree work, and any `Free` call happens **outside** the lock.
+The lock is held only for short operations: lookup, enqueue/dequeue, and pointer
+publication. FMX operations and object destruction happen outside the lock.
 
-This lock-narrow-then-dispatch pattern appears in three places:
+This lock-narrow-then-dispatch pattern avoids holding a critical section across
+visual operations or callback paths.
 
-- `EnqueueOrShow` — decides under lock, calls `ShowRequestOnUI` outside.
-- `OnDialogFinished` — decides under lock, calls `ShowRequestOnUI` outside.
-- `CloseActiveDialog` — snapshots host pointer under lock, calls `CloseProgram` outside.
-
-The reason is straightforward: calling user-facing FMX methods while holding a critical section risks deadlock if those methods queue work that ultimately needs the same lock to complete. A short, predictable lock window protects the data structure without holding the application hostage.
-
-### Why `Active := True` stays during dispatch
-
-When `OnDialogFinished` dequeues the next request, it sets `Active := True` again **before** releasing the lock. This is intentional: a concurrent `EnqueueOrShow` call that arrives during the dispatch must go straight to the queue, not race the dispatch. Without this, two requests could observe `Active = False` simultaneously and both attempt to start a dialog.
+When a form enters owner-destroying cleanup, the registry marks the per-form
+state with `OwnerDestroying = True`. After that point, new requests for that
+state are discarded, programmatic close is ignored, and `OnDialogFinished` does
+not drain the next queued request. The form-state destructor is responsible for
+discarding any pending requests still owned by the state.
 
 ---
 
-## 6. Form-destruction safety
+## 7. Form-destruction safety
 
-Form destruction is the most subtle scenario in the framework, because it can happen at any moment relative to the dialog lifecycle:
-
-- before any request was made;
-- with a dialog visible and waiting for user input;
-- with one dialog visible and others queued behind it;
-- during the close animation;
-- inside the user callback.
-
-The mechanism handles all of these uniformly through the `TDialog4DFormHook` component owned by the parent form.
+Form destruction can occur while no dialog exists, while a dialog is visible,
+while requests are queued, during close, or during application shutdown.
+Dialog4D uses form-owned hooks to keep the registry and host from keeping stale
+references to destroyed forms.
 
 ```mermaid
 sequenceDiagram
     autonumber
     participant Form as Parent form
-    participant Hook as TDialog4DFormHook
+    participant RegHook as Registry hook
+    participant HostHook as Host hook
     participant UI as Main Thread
     participant Registry as TDialog4DRegistry
-    participant State as FormState
     participant Host as TDialog4DHostFMX
 
-    Note over Form: Form is being destroyed<br/>(application closing,<br/>navigation, etc.).
+    Note over Form: Form is being destroyed.
 
-    Form->>Hook: hook is freed as<br/>an owned component
-    Hook->>Hook: capture FForm into local<br/>FForm := nil
+    Form->>RegHook: owned component is destroyed
+    RegHook->>Registry: MarkFormDestroying(form)
+    RegHook->>UI: QueueOnMainThread(OnFormDestroyed)
 
-    Hook->>UI: QueueOnMainThread(OnFormDestroyed)
-    Hook->>Hook: inherited Destroy
+    Form->>HostHook: owned component is destroyed
+    HostHook->>Host: NotifyOwnerDestroying
+    HostHook->>Host: finalize owner-destroying cleanup
 
-    Note over Hook,Host: The host-owned form hook also calls<br/>NotifyOwnerDestroying and frees the host.
-
-    Note over UI: Form destruction continues.<br/>Visual tree is disposed of.<br/>Queued registry cleanup fires next.
-
-    UI->>Registry: OnFormDestroyed(LForm)
-    Registry->>Registry: FCrit.Acquire
-    Registry->>State: TryGetValue + Remove from FMap
-    Registry->>Registry: FCrit.Release
-
-    State->>State: Destroy
-    State->>State: drain Queue<br/>(free each pending request)
-    State->>State: free ActiveRequest if present
-    State->>State: ActiveHost := nil<br/>(host lifetime is not owned here)
+    UI->>Registry: OnFormDestroyed(form)
+    Registry->>Registry: remove FormState under FCrit
+    Registry->>Registry: drain pending requests
+    Registry->>Registry: free ActiveRequest if still owned by state
+    Registry->>Registry: clear ActiveHost pointer
 ```
 
-### Why the cleanup is deferred
+### Why registry cleanup is deferred
 
-The registry-facing form hook schedules `OnFormDestroyed` via `QueueOnMainThread` instead of running it inline. Reason: when the hook is freed, the parent form's visual tree is in the middle of being disposed of. Touching the registry inline could race with the form's own teardown. Deferring to the next main-thread cycle lets the form complete its visual cleanup first, then the registry processes the destruction in a clean state.
+The registry hook first marks the per-form state as owner-destroying, then
+queues `OnFormDestroyed` instead of performing full registry cleanup inline
+during the form's component destruction.
 
-### Why `ActiveHost := nil` instead of freeing
+The early mark is important: it prevents later Dialog4D cleanup paths from
+invoking the application callback or draining the FIFO after the form has begun
+teardown.
 
-The visual host's lifetime is not owned by `TDialog4DFormState`. The form state only publishes the active host pointer so `CloseDialog` can find it. On registry cleanup, setting `ActiveHost := nil` prevents future lookups from finding a stale pointer, but does not free the host itself.
+The deferred cleanup is also important: it lets the form continue its own
+destruction and allows registry cleanup to run from a clean main-thread cycle.
 
-The host is handled by the host-owned form hook, which calls `NotifyOwnerDestroying`, suppresses user callbacks, emits `tkOwnerDestroying`, and then frees the host through its own destruction path.
+### Why active host pointers are not owned by form state
+
+`TDialog4DFormState` publishes the active host pointer so `CloseDialog` can
+find it. It does not own the host. When form state is destroyed, it clears the
+active host pointer but does not free the host directly.
+
+The active visual host is handled either by the host owner-destroying path or by
+the queued final callback after a normal close.
+
+`ActiveRequest` is different: it is owned either by the form state or by the
+queued final callback. The queued final callback claims it under `FCrit` before
+use. If the form state is destroyed before that claim happens, the form-state
+destructor releases the request. These two paths are mutually exclusive.
 
 ### What the application observes
 
-From the application's perspective, form destruction is silent:
+When the parent form is destroyed:
 
+- the per-form state is marked owner-destroying;
 - pending requests for that form are discarded;
-- the active dialog (if any) disappears together with the form's own visual teardown;
-- no user callback fires;
-- telemetry always emits `tkOwnerDestroying`.
+- the active dialog, if any, is canceled as part of the form context teardown;
+- application result callbacks are suppressed when the owner-destroying path
+  wins ownership before the final callback claim;
+- FIFO draining is skipped for that form;
+- owner-destroying telemetry is emitted by the active host path when applicable.
 
-Depending on the exact lifecycle moment, additional close telemetry may or may not already have been emitted by a close path that was in flight. The guaranteed event for this scenario is `tkOwnerDestroying`.
-
-There is no error, no exception, and no "unblock" semantic for the application code. Form destruction is treated as a context-level cancellation of the dialog.
+Form destruction is treated as context cancellation, not as a user decision.
 
 ---
 
-## 7. Worker-thread integration
+## 8. Worker-thread integration
 
-`Dialog4D.Await` is **not** part of the core mechanism. It is a client built on top of `MessageDialogAsync` that adds a blocking wait for worker threads.
+`Dialog4D.Await` is an optional helper layer built on top of
+`TDialog4D.MessageDialogAsync`. It lets worker code wait for a dialog result
+without blocking the UI thread.
+
+### Why Await matters
+
+`Dialog4D.Await` is one of the most distinctive parts of the library.
+
+It does not turn the dialog pipeline into a synchronous UI dialog. Instead, it
+provides synchronous wait semantics for worker threads while preserving the
+normal asynchronous main-thread dialog flow.
+
+In practice, this means:
+
+- the worker thread can wait for a result;
+- the UI thread remains free to render and process the dialog;
+- the dialog is still created and closed through the normal Dialog4D
+  asynchronous pipeline;
+- timeout ends only the worker wait, not the visual dialog itself.
+
+Conceptually, `Dialog4D.Await` is a bridge between a blocking worker-side flow
+and a non-blocking UI-side dialog flow.
 
 ```mermaid
 sequenceDiagram
     autonumber
     participant Worker as Worker thread
     participant Await as TDialog4DAwait
-    participant Facade as TDialog4D
     participant UI as Main Thread
+    participant Facade as TDialog4D
     participant Host as TDialog4DHostFMX
 
-    Note over Worker: Worker calls<br/>MessageDialogOnWorker.
-
     Worker->>Await: MessageDialogOnWorker(...)
-    Await->>Await: validate (must not be main thread)
-    Await->>Await: create IDialog4DAwaitState<br/>(TEvent + result + completed flag)
+    Await->>Await: validate not main thread
+    Await->>Await: create await state<br/>(TEvent + result + status)
 
     Await->>UI: QueueOnMainThread(show closure)
-    Worker->>Await: LState.Event.WaitFor(timeout)
+    Worker->>Await: WaitFor(timeout)
 
-    Note over Worker: Worker is now blocked.<br/>Main thread continues normally.
+    UI->>Facade: MessageDialogAsync(...)
+    Facade->>Host: normal Dialog4D show pipeline
 
-    UI->>Facade: TDialog4D.MessageDialogAsync(...)
-    Facade->>Host: normal show pipeline
+    Host->>UI: dialog closes
+    UI->>Await: set result/status<br/>signal event
 
-    Note over Host: User answers the dialog.
-
-    Host->>UI: close callback fires
-    UI->>Await: AsyncState.ResultValue := result<br/>AsyncState.Completed := True<br/>AsyncState.Event.SetEvent
-
-    Note over Worker: Worker.WaitFor returns wrSignaled.
-
-    Await->>Await: read result and status from state
-    Await-->>Worker: return TModalResult + status
+    Await-->>Worker: return result + await status
 ```
 
-### Why `Dialog4D.Await` is a client, not a core feature
+### Why `MessageDialogOnWorker` is forbidden on the main thread
 
-The await helper does not extend the core mechanism. It uses the same `MessageDialogAsync` path that any other caller would use, and it adds a single extra component: an `IDialog4DAwaitState` carrier that lets the worker thread wait on a `TEvent` while the main thread runs the dialog normally.
+The main thread is responsible for rendering and processing the dialog. If it
+blocked waiting for the dialog result, the dialog would not be able to complete.
+For that reason, `MessageDialogOnWorker` raises `EDialog4DAwait` when called
+from the main thread.
 
-This design has two consequences:
+### Timeout semantics
 
-1. **The await helper cannot be called from the main thread.** Doing so would deadlock — the thread that should render the dialog would be parked waiting for the result. `MessageDialogOnWorker` raises `EDialog4DAwait` immediately if called from the main thread.
-2. **Timeout does not close the dialog.** When the timeout expires, the worker stops waiting and returns `dasTimedOut` with `mrNone`. The dialog stays on screen and remains visible to the user — the timeout only governs the worker's patience, not the dialog's lifetime. If the application wants to dismiss the dialog after a worker timeout, it can call `TDialog4D.CloseDialog` from the same worker.
+Timeout does not close the visual dialog. It only ends the worker wait. On
+timeout:
+
+- status is `dasTimedOut`;
+- result is `mrNone`;
+- the worker returns;
+- the dialog may still remain visible;
+- smart worker-side overload callbacks are not invoked after timeout.
+
+If the application wants to dismiss the still-visible dialog after a timeout, it
+can request `TDialog4D.CloseDialog` separately.
 
 ### The smart `MessageDialog` overload
 
-`TDialog4DAwait.MessageDialog` (without "OnWorker") is a convenience method that detects the calling thread:
+`TDialog4DAwait.MessageDialog` adapts to the calling thread:
 
-- on the main thread, it delegates to `MessageDialogAsync` (non-blocking);
-- on a worker thread, it delegates to `MessageDialogOnWorker` (blocking).
+- on the main thread, it delegates to `MessageDialogAsync`;
+- on a worker thread, it delegates to `MessageDialogOnWorker`.
 
-This lets shared code call `MessageDialog` regardless of the thread context. The `ACallbackOnMain` parameter, when `True`, additionally re-dispatches the user callback to the main thread via `QueueOnMainThread`, so the callback can touch UI directly without a manual `TThread.Queue` inside it.
+When called from a worker thread, `ACallbackOnMain = True` redispatches the
+callback to the main thread. When `ACallbackOnMain = False`, the worker-side
+callback runs on the worker thread after the wait completes.
+
+This is why `Dialog4D.Await` can feel synchronous from the point of view of the
+worker code while the UI pipeline remains fully asynchronous.
 
 ---
 
-## 8. Practical interpretation
+## 9. Configuration snapshots
 
-The same actors from the architectural map can also be understood as four explicit roles:
+Dialog4D uses request-time snapshots to keep queued dialogs stable.
+
+At request time, `TDialog4D.MessageDialogAsync` captures:
+
+- theme values;
+- text-provider reference;
+- telemetry sink;
+- result callback;
+- standard button set or a copied custom-button array;
+- title, message, dialog type, cancelable flag, and parent form.
+
+The theme is a record and is copied by value. That is why `TDialog4DTheme` is
+intended to contain value fields only. Custom-button arrays are copied so the
+caller cannot mutate a queued request accidentally by changing the original
+dynamic array after the call.
+
+Provider, telemetry sink, and callback values are captured as references or
+procedure values. Dialog4D captures which provider/sink/callback should be used;
+it does not clone arbitrary objects behind those references.
+
+---
+
+## 10. Telemetry interpretation
+
+Dialog4D telemetry is best-effort observability. It is intended for logging,
+diagnostics, demos, and light auditing of dialog flow.
+
+The lifecycle events are:
+
+- `tkShowRequested` — request entered the public API path.
+- `tkShowDisplayed` — the visual host became visible.
+- `tkCloseRequested` — a close trigger was accepted.
+- `tkClosed` — the host reached the closed finalization path.
+- `tkCallbackInvoked` — Dialog4D's close-callback pipeline invoked its callback
+  stage.
+- `tkCallbackSuppressed` — callback execution was intentionally skipped.
+- `tkOwnerDestroying` — the parent form began destruction while a dialog was
+  active.
+
+Telemetry sink exceptions are swallowed by Dialog4D so instrumentation cannot
+break the dialog flow.
+
+### Important boundary
+
+Telemetry records the Dialog4D lifecycle. It should not be treated as proof that
+an arbitrary domain operation launched by an application callback completed
+successfully. Domain success/failure belongs to application logic.
+
+---
+
+## 11. Practical interpretation
+
+The mechanism can be understood as five roles:
 
 1. **Caller / UI owner**  
-   Configures global theme/provider/telemetry at startup, calls `MessageDialogAsync` whenever a decision is needed, optionally calls `CloseDialog` to dismiss the active dialog from any thread.
+   Configures theme/provider/telemetry at startup or a controlled configuration
+   point. Requests dialogs and optionally requests programmatic close.
 
 2. **Public facade** (`TDialog4D`)  
-   Holds the global configuration as class vars. Builds immutable `TDialog4DRequest` snapshots, validates inputs, marshals to the main thread, and emits `tkShowRequested` telemetry.
+   Validates input, captures request-time configuration, resolves parent form on
+   the main-thread execution path, emits request telemetry, and hands the
+   request to the registry.
 
 3. **Registry** (`TDialog4DRegistry`)  
-   Maps each parent form to its `TDialog4DFormState`. Serializes requests per form via a FIFO queue under a single `TCriticalSection`. Routes programmatic close calls to the active host. Detects form destruction through the form-owned hook and discards pending state.
+   Coordinates per-form FIFO queues, active request/host publication,
+   owner-destroying state, ownership transfer of the active request, and cleanup
+   of per-form state.
 
 4. **Visual host** (`TDialog4DHostFMX`)  
-   One instance per visible dialog. Builds the FMX visual tree, runs the open and close animations, handles user input (button click, backdrop tap, Esc/Enter, Android Back), emits all per-instance telemetry, and runs the close pipeline including the deferred user callback.
+   Builds and owns the FMX overlay, handles input, emits host lifecycle
+   telemetry, and finalizes the close pipeline.
 
-If a developer understands those four roles, the whole mechanism becomes much easier to reason about.
+5. **Await helper** (`TDialog4DAwait`)  
+   Bridges worker-thread blocking semantics and the asynchronous UI dialog
+   pipeline when a background workflow needs to wait for a decision.
 
-### Note on snapshot semantics
-
-The `TDialog4DRequest` built by `MessageDialogAsync` captures a copy of `FTheme` and a reference to `FTextProvider` at the moment of the call. Later changes to the global theme via `ConfigureTheme` do not affect requests already in flight — they render with the theme that existed when they were requested.
-
-### Note on telemetry as observability
-
-Every interesting transition emits a telemetry event:
-
-- `tkShowRequested` — request entered the system.
-- `tkShowDisplayed` — dialog became visible.
-- `tkCloseRequested` — close was triggered.
-- `tkClosed` — visual tree disposed.
-- `tkCallbackInvoked` — user callback ran successfully (or raised, with `ErrorMessage`).
-- `tkCallbackSuppressed` — callback was intentionally skipped.
-- `tkOwnerDestroying` — parent form began destruction while the dialog was active.
-
-Telemetry is best-effort: exceptions raised inside the sink are silently swallowed by `SafeEmitTelemetry`. A misbehaving telemetry consumer cannot break the dialog flow. This is the same guarantee that lets the framework safely emit telemetry in the close pipeline without risking partial-state recovery.
+If those five roles are clear, the rest of the mechanism becomes easier to
+reason about.
 
 ---
 
-## 9. Reading guidance
+## 12. Reading guidance
 
 Use the diagrams in this order:
 
-1. **Architectural map** — see the parts and how the registry, the form hook, and the visual host fit together.
-2. **Main flow** — see the normal path from `MessageDialogAsync` to the user callback, including the lock-narrow-then-dispatch discipline.
-3. **Alternate paths** — see the different close reasons and how the user callback runs after Cleanup.
-4. **State model** — understand the four host states and the role of the hit-test guard at close start.
-5. **Per-form FIFO queue flow** — see how concurrent requests for the same form are serialized and why `Active` stays `True` during dispatch.
-6. **Form-destruction safety** — understand the deferred registry cleanup pattern and the separate host owner-destroying path.
-7. **Worker-thread integration** — understand why `Dialog4D.Await` is a client of the mechanism, not a part of it.
-8. **Practical interpretation** — consolidate the four roles in your mental model.
-
-That sequence makes the mechanism visible as a machine, not just as a list of API methods.
+1. **Architectural map** — understand the main parts and ownership boundaries.
+2. **Main flow** — follow a request from API call to application callback.
+3. **Close pipeline** — understand internal callback semantics and cleanup
+   ordering.
+4. **Alternate close paths** — understand close reasons and owner destruction.
+5. **State model** — understand host states and main-thread reentrancy guards.
+6. **Per-form FIFO queue flow** — understand serialization and lock discipline.
+7. **Form-destruction safety** — understand why hooks and deferred cleanup are
+   used.
+8. **Worker-thread integration** — understand await and timeout boundaries.
+9. **Configuration snapshots** — understand what is copied and what is
+   referenced.
+10. **Telemetry interpretation** — understand what telemetry does and does not
+    prove.
 
 ---
 
-*This document complements the README by describing the mechanism from the inside. For project-level information, see [README.md](../README.md).*
+*This document complements the README by describing the mechanism from the
+inside. For project-level information, see [README.md](../README.md).*

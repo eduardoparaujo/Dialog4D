@@ -1,44 +1,83 @@
-# From `ShowMessage` to Dialog4D
+# From FMX Dialog Basics to Dialog4D
 
-### A journey through FMX dialogs, from the real problem to a mechanism that addresses it
+**Version:** 1.0.1 — 2026-05-01
+
+### A conceptual journey through FMX dialogs, asynchronous flow, and explicit dialog coordination
 
 ---
 
-If you have ever written something in Delphi FMX that looked synchronous, ran fine on Windows, and then behaved differently when the same code shipped to iOS or Android — dialogs that did not block, results that arrived earlier than expected, code paths that ran before the user answered — this text is for you.
+If you have ever written Delphi FMX code that looked synchronous on desktop and
+then needed a different continuation shape on mobile — dialogs that return
+before the user answers, callbacks that carry the real result, or code paths
+that must move inside a close handler — this text is for you.
 
-Delphi already provides the dialog tools most FMX applications should start with: `ShowMessage`, `MessageDlg`, and especially `FMX.DialogService`. Those APIs are practical, officially supported, and entirely appropriate for many scenarios.
+Delphi already provides the dialog tools most FMX applications should start
+with: `ShowMessage`, `MessageDlg`, and especially `FMX.DialogService`. Those
+APIs are practical, officially supported, and appropriate for many scenarios.
 
-This guide follows a natural path: start from the simplest FMX dialog (`ShowMessage`), look at how each layer behaves as application requirements grow, and only then introduce the concepts that help address those requirements when the basic tools are no longer enough.
+This guide follows a natural path: start from simple FMX dialog calls, look at
+how each layer behaves as application requirements grow, and only then
+introduce the concepts that help when an application needs additional
+coordination around dialogs.
 
-By the end, the goal is for you to understand not only **how** to use dialogs in Delphi FMX, but **why** each layer in the dialog story exists. As a practical culmination, you will see **Dialog4D**, a complementary mechanism that consolidates these decisions into an API that is small on the surface but designed to make user decisions explicit, predictable, and visually consistent across desktop and mobile.
+By the end, the goal is for you to understand not only **how** to use dialogs in
+Delphi FMX, but **why** each layer in the dialog story exists. As a practical
+culmination, you will see **Dialog4D**, a complementary library that consolidates
+these concerns into a small public API designed to make user decisions explicit,
+observable, queue-aware, and visually consistent inside an FMX-rendered dialog
+surface.
 
-> **A note on positioning.** Dialog4D does not replace the dialog mechanisms that ship with Delphi. `ShowMessage`, `MessageDlg`, and `FMX.DialogService` remain valid choices for many scenarios and are the natural starting point for FMX applications. Dialog4D is a complementary layer for applications where dialogs become part of the visual identity and the application flow. The intent of this guide is not to argue that the standard mechanisms are wrong, but to walk through the FMX dialog design space and show where a dedicated mechanism becomes useful.
+> **Scope note.** This guide walks through different ways of working with
+> dialogs in FMX, from the APIs already available in Delphi to scenarios where
+> the application needs more coordination around the decision flow. Dialog4D
+> appears in this context as a complementary layer for FMX-rendered dialogs,
+> with focus on theming, per-form queueing, configuration snapshots, telemetry,
+> and worker-thread integration.
 
-> **Note on prerequisites.** This guide focuses on dialogs in FMX. It assumes you are comfortable with anonymous methods (closures), `TThread.Queue` for marshaling work to the main thread, and basic threading vocabulary. If those concepts are new to you, the [SafeThread4D conceptual guide](https://github.com/eduardoparaujo/SafeThread4D/blob/main/docs/Guide_en.md) covers them in detail and is the natural companion to this text.
+> **Note on prerequisites.** This guide focuses on dialogs in FMX. It assumes
+> you are comfortable with anonymous methods (closures), `TThread.Queue` /
+> main-thread marshaling, and basic threading vocabulary. If those concepts are
+> new to you, the [SafeThread4D conceptual guide](https://github.com/eduardoparaujo/SafeThread4D/blob/main/docs/Guide_en.md)
+> covers them in detail and is a natural companion to this text.
 
 ---
 
 ## Part 1 — Why dialogs need an explicit lifecycle
 
-A dialog looks like a small, harmless thing. The user clicks a button, a window appears asking "Save changes?", the user picks an answer, and the application continues. Three lines of code, no big deal.
+A dialog looks like a small, harmless thing. The user clicks a button, a window
+appears asking "Save changes?", the user picks an answer, and the application
+continues. Three lines of code, no big deal.
 
-The trouble is that "the application continues" is not a single concept. It is at least three different things:
+The trouble is that "the application continues" is not a single concept. It is
+at least three different things:
 
-1. **The application continues drawing the UI.** Animations keep playing, timers keep firing, incoming events keep arriving.
-2. **The application continues the calling method.** The line right after the dialog call eventually executes.
-3. **The application continues the user's flow.** The next decision, the next screen, the next question depends on the answer.
+1. **The application continues drawing the UI.** Animations keep playing,
+   timers keep firing, incoming events keep arriving.
+2. **The application continues the calling method.** The line right after the
+   dialog call eventually executes.
+3. **The application continues the user's flow.** The next decision, the next
+   screen, or the next action depends on the answer.
 
-In a desktop application running on Windows, all three can sometimes look like the same thing: the dialog blocks everything, the user answers, and execution resumes from the line right after the call. The illusion that "the application stopped, then continued" is workable.
+In a traditional desktop-style modal flow, those three concepts can appear to be
+the same thing: the dialog blocks the caller, the user answers, and execution
+continues from the next line.
 
-That illusion does not survive contact with FMX mobile. On iOS and Android, the operating system does not allow the application to block the main thread waiting for a user decision. The UI must keep rendering, animating, and responding to system events while the dialog is visible. The platform forces a different shape: **the call to show a dialog returns immediately, and the answer arrives later through a callback.**
+In cross-platform FMX code, especially when mobile targets are involved, that is
+not a safe universal assumption. FMX has APIs whose behavior depends on the
+platform, the selected presentation mode, and whether the call uses a callback
+shape. The practical lesson is simple:
 
-This is not a quirk of FMX. It is the platform model on every modern mobile operating system. Once you accept it, every other piece of dialog design starts to make sense.
+> **Do not treat a user decision as a synchronous function return unless the API
+> and platform contract explicitly support that usage.**
+
+Once you accept that, every other piece of dialog design becomes easier to
+reason about.
 
 ---
 
-## Part 2 — `ShowMessage`: the simplest dialog, and its first mismatch
+## Part 2 — `ShowMessage`: the simplest dialog and the first mental model
 
-The most basic FMX dialog is `ShowMessage` from `FMX.Dialogs`:
+The simplest dialog shape is a notification:
 
 ```delphi
 uses
@@ -52,28 +91,36 @@ begin
 end;
 ```
 
-You read this code top-to-bottom and you expect: save the document, show a confirmation, close the document.
+You read this code top-to-bottom and may expect: save the document, show a
+confirmation, then close the document.
 
-On Windows, this is what happens. The dialog appears, the application waits for the user to dismiss it, and then `CloseDocument` runs.
+For simple desktop-style notifications, this may be acceptable. But it is not a
+good general pattern for cross-platform continuation logic. A notification does
+not make a meaningful decision; it merely informs the user. If the code after
+the notification depends on the user dismissing the message, the continuation is
+already in the wrong place.
 
-On iOS and Android, this is **not** what happens. `ShowMessage` returns immediately. The dialog appears on the screen, but `CloseDocument` runs **before** the user has dismissed it. By the time the user taps "OK", the document is already closed.
+FMX's service-oriented dialog APIs make this platform sensitivity explicit. For
+example, the official `TDialogService.ShowMessage` documentation describes
+desktop behavior as synchronous and mobile behavior as asynchronous in the
+platform-oriented mode. That means code that assumes "the line after the dialog
+runs after the user closes it" is fragile when reused across different FMX
+targets.
 
-The reason is exactly what we discussed in Part 1: the mobile platform does not allow the main thread to block waiting for user input. `ShowMessage` is a thin wrapper that, on mobile, returns immediately to keep the UI responsive. The visible dialog is just a side effect — the synchronous-looking call is an illusion.
+A safer mental model is:
 
-This is the first important cross-platform mismatch of FMX dialogs:
+> **A notification is not a continuation point.**  
+> **If something must happen after the user dismisses a dialog, use an API shape
+> that gives you an after-close callback.**
 
-> **`ShowMessage` looks synchronous, but it is only synchronous on Windows.**  
-> **On mobile, the line after the call runs before the user has answered.**
-
-If your code only runs on Windows, you can use `ShowMessage` for simple notifications and the assumption holds. As soon as the same code is built for iOS or Android, the assumption silently breaks. The bug is hard to find because the code looks correct.
-
-A safer mental model is to assume from the start that **a dialog is never a synchronous interruption** — it is a notification that runs in parallel with the rest of your code. With this assumption, you would not write `CloseDocument` after `ShowMessage`. You would either run `CloseDocument` first and then notify, or use a dialog API that gives you a callback for "after the user answered".
+This mental shift prepares us for the next layer.
 
 ---
 
-## Part 3 — `MessageDlg`: the same cross-platform trap, with more buttons
+## Part 3 — `MessageDlg`: more buttons, same need for care
 
-`MessageDlg` is the next step up. It is also in `FMX.Dialogs`, and it lets you show a dialog with multiple buttons and ask the user a question:
+`MessageDlg` is the next step up. It lets you ask a question with multiple
+buttons:
 
 ```delphi
 uses
@@ -91,21 +138,32 @@ begin
 end;
 ```
 
-This pattern is everywhere in legacy Delphi code. It reads like a normal `if` statement: "if the user said yes, save; then close". The return value of `MessageDlg` is the modal result, and the code branches on it.
+This shape is familiar to Delphi developers. It reads like a normal `if`
+statement: if the user said yes, save; then close.
 
-On Windows, this works as it reads. On iOS, the legacy blocking overload can still behave synchronously. On Android, however, that blocking shape is not supported. If you move to a callback-based overload, the continuation is no longer the return value: on mobile, code placed after the call can execute before the user's decision is delivered.
+In modern FMX code, however, `MessageDlg` has important platform and overload
+considerations. The official documentation marks `FMX.Dialogs.MessageDlg` as
+deprecated and points developers toward async dialog-service APIs. It also
+documents that blocking support varies by platform and that callback-based
+calls are non-blocking on mobile platforms.
 
-The important lesson is not that every `MessageDlg` overload always returns immediately. The lesson is that `MessageDlg` has platform- and overload-dependent behavior, which makes return-value-based decision flow a weak foundation for cross-platform FMX code.
+So the lesson is not "never use familiar dialog calls." The lesson is narrower
+and more practical:
 
-In FMX, `MessageDlg`'s return value should not be treated as the main cross-platform decision point. The legacy function remains familiar to Delphi developers, but when the answer actually matters across desktop and mobile, a callback-based shape is safer and easier to reason about.
+> **Return-value-based dialog flow is not the strongest foundation for
+> cross-platform FMX decision logic.**
 
-This is exactly what `FMX.DialogService` provides.
+When the user's answer actually controls what happens next, a callback-based
+shape is clearer and safer.
+
+That is exactly what `FMX.DialogService` provides.
 
 ---
 
-## Part 4 — `FMX.DialogService`: the recommended path
+## Part 4 — `FMX.DialogService`: the recommended service-oriented path
 
-`FMX.DialogService` is the official FMX dialog service, and it is the API family Embarcadero points developers to when moving away from legacy `FMX.Dialogs` dialog calls. It exposes the same `MessageDialog` family of calls, but the answer is delivered through an anonymous callback instead of being handled as a cross-platform return-value decision point:
+`FMX.DialogService` is the official FMX dialog service family. It is the natural
+place to go when you want a callback-based dialog shape in FMX:
 
 ```delphi
 uses
@@ -129,33 +187,40 @@ begin
 end;
 ```
 
-The shape is different. The decision is no longer a return value tested in an `if` — it is a parameter delivered to a callback that runs **after** the user has answered. The `CloseDocument` call moved inside the callback, where it belongs: after the answer is known.
+The shape is different. The decision is no longer a return value tested in an
+`if`; it is a parameter delivered to a callback that runs after the user has
+closed the dialog. The continuation moved inside the callback, where the answer
+is known.
 
-This is a real improvement. The continuation is explicit: code that depends on the user's answer lives inside the close callback. Depending on `PreferredMode`, the call itself may be synchronous on desktop or asynchronous on mobile, but the decision point is consistent: the callback is invoked after the user closes the dialog. For most simple cases, `FMX.DialogService` is the correct choice and there is no reason to look further. The rest of this guide is **not** an argument that `FMX.DialogService` should be avoided — it is an exploration of the FMX dialog design space, showing where additional concerns appear and how they can be addressed when they do.
+This is a real improvement. For many applications, `FMX.DialogService` is the
+right tool: it is built into FMX, it manages platform differences, and it fits
+the standard FireMonkey dialog model.
 
-### `PreferredMode`: a partial bridge between desktop and mobile expectations
+The rest of this guide is not an argument against `FMX.DialogService`. It is an
+exploration of what happens when an application needs extra structure around
+dialogs: per-form queueing, request-time visual snapshots, custom per-call
+button vocabulary, programmatic close, telemetry, or worker-thread wait
+semantics.
 
-`FMX.DialogService` offers a setting called `PreferredMode` that controls how dialogs render:
+### `PreferredMode`: bridging desktop and mobile expectations
 
-```delphi
-TDialogService.PreferredMode := TDialogService.TPreferredMode.Sync;
-```
+`TDialogService` exposes `PreferredMode` with three values: `Platform`, `Async`,
+and `Sync`.
 
-The values are `Sync`, `Async`, and `Platform`.
+In platform mode, desktop platforms prefer synchronous behavior and mobile
+platforms prefer asynchronous behavior. `Sync` is not supported on Android.
+This is an important design clue: if one codebase targets both desktop and
+mobile, an asynchronous mental model is usually the safest common denominator.
 
-In practice, `Platform` behaves differently depending on the platform family: desktop platforms prefer synchronous dialog behavior, while mobile platforms use asynchronous behavior. In addition, `Sync` is not supported on Android. That means desktop code can still be written in a more synchronous style, while mobile code must still be treated as asynchronous.
-
-For that reason, if the same FMX codebase is expected to behave consistently across desktop and mobile, it is safer to adopt an asynchronous mental model from the start.
-
-This is the realization that motivates the rest of this guide: **once you commit to the asynchronous shape, new design questions appear**.
+Once you commit to the asynchronous shape, new design questions appear.
 
 ---
 
 ## Part 5 — Dialog as a flow router
 
-Once you accept that dialog calls are asynchronous, you start to see them differently. They are not "questions you ask"; they are **branches in your application's flow**.
-
-Look at this code:
+Once you accept that dialog calls are asynchronous, you start to see them
+differently. They are not merely questions; they are **branches in your
+application flow**.
 
 ```delphi
 procedure TForm1.PrepareToCloseDocument;
@@ -179,14 +244,18 @@ begin
 end;
 ```
 
-The method `PrepareToCloseDocument` does two things visually: it validates state, and then it asks a question. But the cross-platform behavior should be understood differently. The lines that decide what happens next — `SaveAndClose`, `CloseWithoutSaving`, or doing nothing — live inside the callback. On mobile, the method can return before the user answers; on desktop, depending on the preferred mode, it may wait. The important point is that the continuation belongs to the callback because the callback is the cross-platform-safe place where the answer is known.
+The method validates state and asks a question. The continuation belongs to the
+callback because the callback is where the answer is known.
 
 This is a useful mental model:
 
 > **A dialog call near the end of a method acts as a flow router.**  
-> The original method ends; the rest of the application flow continues through one of the callback branches.
+> The method starts a decision, and the continuation flows through one of the
+> callback branches.
 
-This works well, but only under one condition: the dialog call must be treated as **the last meaningful thing the method does**. If you write code after the dialog call, that code is not a cross-platform-safe continuation point; on mobile or in asynchronous mode, it can run before the user has answered.
+This works well under one discipline: the dialog call should usually be the last
+meaningful statement in the method. Code that depends on the user's answer
+belongs inside the callback.
 
 ```delphi
 procedure TForm1.PrepareToCloseDocument;
@@ -202,103 +271,72 @@ begin
         SaveDocument;
     end);
 
-  CloseDocument;  // ← BUG on mobile/async mode: may run before the user answers.
+  CloseDocument;  // Not a cross-platform-safe continuation point.
 end;
 ```
 
-This is the same cross-platform problem from Parts 2 and 3, but expressed in a more subtle form. Even when the dialog API provides the correct callback, the developer can still write synchronous-looking code around it and produce a cross-platform bug.
+The rule is simple:
 
-There is a discipline that emerges from this:
-
-> **In FMX, treat every dialog call as the end of the method.**  
-> **Whatever needs to run after the user's decision belongs inside the callback.**
-
-If you internalize this rule, you start to write methods where the dialog call is naturally the last statement, and the callback contains the continuation. This is the shape that scales — the next part shows why.
+> **In FMX, treat the dialog callback as the continuation.**  
+> Whatever needs to run after the user's decision belongs inside the callback.
 
 ---
 
 ## Part 6 — When the router meets concurrency: the queue problem
 
-The "dialog as flow router" pattern works perfectly when **you** are the only one routing. The method that opens the dialog is also the method that decides what happens next. There is one source of dialog requests, and it is the call you just made.
+The "dialog as flow router" pattern works well when one source controls the
+flow. Real applications often have multiple independent sources that may request
+dialogs:
 
-Real applications are rarely that simple.
+- a button click that asks for confirmation;
+- a timer warning about session expiration;
+- a server response that reports an error;
+- a worker thread reporting an exceptional condition.
 
-Consider a screen with three independent sources of dialog requests:
+Each source can request a dialog at a different time. If the application wants
+those dialogs to appear one at a time, in order, it needs a coordination policy.
 
-- a button the user clicks to confirm an action;
-- a timer that fires every minute and warns about session expiration;
-- an HTTP response handler that displays a server error when an API call fails.
+`FMX.DialogService` does not expose a Dialog4D-style per-form FIFO queue in its
+public API. That is not a flaw; it simply means that if an application needs
+that specific serialization rule, the application needs to provide the
+coordination.
 
-Each one of these can request a dialog **at any moment**. The user can click the confirmation button while the session-expiration warning is about to fire, while a server error is arriving in the background. None of the three sources knows about the other two.
+The application-level coordination usually involves:
 
-With `FMX.DialogService`, what happens?
+- tracking whether a dialog is already active;
+- storing pending requests;
+- dispatching the next request after the active one closes;
+- avoiding races between close callbacks and new arrivals.
 
-```delphi
-// Source 1: button click
-TDialogService.MessageDialog(
-  'Confirm purchase?',
-  TMsgDlgType.mtConfirmation,
-  [TMsgDlgBtn.mbYes, TMsgDlgBtn.mbNo],
-  TMsgDlgBtn.mbYes,
-  0,
-  procedure(const R: TModalResult) begin ... end);
+Dialog4D builds this specific policy into the mechanism:
 
-// Source 2: timer (runs at the same time)
-TDialogService.MessageDialog(
-  'Your session expires in 2 minutes.',
-  TMsgDlgType.mtWarning,
-  [TMsgDlgBtn.mbOK],
-  TMsgDlgBtn.mbOK,
-  0,
-  procedure(const R: TModalResult) begin ... end);
+> **For each parent form, Dialog4D serializes dialog requests through a FIFO
+> queue.**
 
-// Source 3: server error (also runs at the same time)
-TDialogService.MessageDialog(
-  'Network request failed.',
-  TMsgDlgType.mtError,
-  [TMsgDlgBtn.mbRetry, TMsgDlgBtn.mbCancel],
-  TMsgDlgBtn.mbRetry,
-  0,
-  procedure(const R: TModalResult) begin ... end);
-```
+A request for the same form waits behind the active one. Requests for different
+forms remain independent. This is useful when multiple sources can ask
+questions in the same screen and the application wants one visible dialog at a
+time for that form.
 
-Three independent dialog requests can arrive at nearly the same time. `FMX.DialogService` does not expose a documented per-form FIFO serialization mechanism, so the application must coordinate overlapping requests if it wants them to behave sequentially and predictably.
-
-The naive fix is to make sure the application never requests two dialogs concurrently. But this is a discipline, not a guarantee. To enforce it, the developer would have to:
-
-- track which dialogs are visible at any given moment;
-- queue new requests manually when a dialog is already open;
-- dispatch the queued requests when the active dialog closes;
-- handle race conditions between the close callback and new arrivals.
-
-In other words, the developer would have to reimplement a queue, by hand, every time. And get it right every time. And remember to wire it up across every source of dialog requests in the application.
-
-This is exactly the kind of structural concern that does not belong in application code:
-
-> **With `FMX.DialogService`, sequential dialog flow is a convention.**  
-> **The application code must coordinate overlapping requests explicitly.**
-
-Dialog4D approaches this differently. The framework has a per-form FIFO queue built into the mechanism. Every dialog request for the same form is automatically serialized: the second request waits in the queue until the first closes, the third waits for the second, and so on. The developer does not coordinate anything — the framework does.
-
-> **With Dialog4D, sequential dialog flow is a guarantee of the mechanism.**
-
-This is a different kind of correctness. The application code does not have to be defensive about concurrent dialog requests. The queue is a property of the system, not a discipline of the programmer.
-
-Section 5.1 of the bundled demo (`Queue Demo`) shows this directly: it dispatches six dialogs in a tight loop from a `TTask.Run` worker, and the framework queues them automatically. The user sees one dialog at a time, in arrival order, with no overlap and no lost requests.
+Section 5.1 of the bundled demo (`Queue burst`) shows this directly: it
+dispatches six dialogs from a `TTask.Run` worker, and the Dialog4D queue
+presents them one at a time.
 
 ---
 
-## Part 7 — Sequential decisions and the depth of nested callbacks
+## Part 7 — Sequential decisions and nested callbacks
 
-Even within a single source of dialog requests, multi-step decisions raise their own design challenge.
+Even within a single source of dialog requests, multi-step decisions raise their
+own design challenge.
 
-Consider a "Save before closing?" dialog where each answer leads to a follow-up question:
+Consider a "Save before closing?" dialog where each answer leads to a different
+path:
 
 - "Yes" → save, then ask "Close now?"
 - "No" → ask "Are you sure? Discarding cannot be undone."
 - "Cancel" → return to the editor, no follow-up.
 
-Written with `FMX.DialogService`, this becomes:
+Written with callback-based dialogs, this naturally becomes nested callbacks:
 
 ```delphi
 TDialogService.MessageDialog(
@@ -345,66 +383,37 @@ TDialogService.MessageDialog(
   end);
 ```
 
-Functionally, this works. The user sees one dialog at a time, the answers are processed correctly, and the flow ends in the right place.
+Functionally, this is a valid shape. The user sees one question, then the next
+question depends on the first answer.
 
-Visually, the indentation grows. Each branch that adds a follow-up dialog adds a level of nesting. A three-step decision is already pushing the right edge of the editor. A four-step decision becomes hard to read, and changes to one branch require careful navigation to make sure you are editing the right closure.
+The cost is readability. Each additional decision can add another level of
+indentation. That is not a problem unique to any dialog API; it is the normal
+price of callback-based asynchronous flow.
 
-This is a well-known shape — it is the same "callback hell" that JavaScript faced before promises and async/await. In Delphi FMX, there is no built-in async/await for dialogs, so the indentation is the price of correctness.
-
-Dialog4D does not eliminate the nesting — it cannot, because the asynchronous shape is fundamental. But it makes the nested code shorter and clearer in two ways:
-
-**1. Less ceremony per call.** The `0` parameter for `HelpCtx` is gone, the type prefixes are shorter, the default-button parameter integrates with the snapshot model.
-
-**2. Custom buttons replace generic Yes/No semantics.** Instead of `mbYes`/`mbNo` and a comment explaining what each one means, the buttons carry their own captions and roles:
-
-```delphi
-TDialog4D.MessageDialogAsync(
-  'You have unsaved changes.',
-  TMsgDlgType.mtWarning,
-  [
-    TDialog4DCustomButton.Default('Save and Close', mrYes),
-    TDialog4DCustomButton.Destructive('Close Without Saving', mrNo),
-    TDialog4DCustomButton.Cancel('Review Changes')
-  ],
-  procedure(const R1: TModalResult)
-  begin
-    case R1 of
-      mrYes:    SaveAndClose;
-      mrNo:     CloseWithoutSaving;
-      mrCancel: ReturnToEditor;
-    end;
-  end,
-  'Unsaved Changes');
-```
-
-The dialog now speaks in domain language. A reviewer reading the code sees "Save and Close", "Close Without Saving", "Review Changes" — three actions with clear meaning. The next part is dedicated to this concept.
+Dialog4D does not remove the asynchronous shape. It keeps the flow explicit, but
+tries to make each dialog call carry more meaning by reducing ceremony and by
+allowing domain-specific button captions.
 
 ---
 
 ## Part 8 — Buttons as vocabulary
 
-In a classic dialog API, the buttons are an enum: `mbOK`, `mbCancel`, `mbYes`, `mbNo`, `mbAbort`, `mbRetry`, `mbIgnore`, `mbAll`, `mbNoToAll`, `mbYesToAll`, `mbHelp`, `mbClose`. The text on each button comes from a text provider — by default, the English captions "OK", "Cancel", "Yes", "No", and so on.
+Standard dialog buttons are intentionally small and generic: `OK`, `Cancel`,
+`Yes`, `No`, `Abort`, `Retry`, `Ignore`, and so on. That vocabulary is perfect
+for many dialogs.
 
-This works for simple confirmation dialogs. "Are you sure you want to delete?" → Yes / No. The semantics are universal enough that "Yes" and "No" mean the same thing in every context.
-
-Real applications often need more specific language. Consider this confirmation:
+Real applications sometimes need more specific action language. Consider this
+confirmation:
 
 > **Delete "Q4 2025 Report.xlsx"? This file will be permanently removed.**
 
-What should the buttons say? The standard options are unsatisfying:
-
-- "Yes" / "No" — too vague. What does "Yes" mean? Yes, delete? Yes, keep?
-- "OK" / "Cancel" — also vague. Cancel what?
-- "Abort" / "Retry" / "Ignore" — wrong vocabulary entirely.
-
-The buttons that match the question are:
+The domain-specific actions are clearer than generic Yes/No:
 
 - "Delete Permanently"
 - "Keep File"
 
-These captions are not in any standard enum. They are domain-specific. They are clearer than any combination of the default options, because they are written in the language of the action.
-
-`FMX.DialogService` does not provide first-class support for per-call custom button captions. Dialog4D introduces `TDialog4DCustomButton`, a record that carries a caption, a `TModalResult`, and two visual flags:
+Dialog4D adds `TDialog4DCustomButton` for this case. Each custom button carries
+a caption, a `TModalResult`, and visual role flags:
 
 ```delphi
 TDialog4DCustomButton.Default     ('Save and Close',       mrYes);
@@ -413,24 +422,21 @@ TDialog4DCustomButton.Make        ('Close Without Saving', mrNo);
 TDialog4DCustomButton.Cancel      ('Keep File');
 ```
 
-Four convenience constructors map to four visual roles:
+The convenience constructors represent four roles:
 
-- **Default** — the primary action, rendered with the accent color and triggered by Enter on desktop.
-- **Destructive** — a dangerous action, rendered with the error color (typically red).
+- **Default** — the primary action, rendered with the accent color and
+  triggered by Enter on desktop.
+- **Destructive** — a dangerous action, rendered with the error color.
 - **Make** — a neutral action with explicit flags.
-- **Cancel** — a cancel-like action, with `ModalResult` always set to `mrCancel`.
+- **Cancel** — a cancel-like action, with `ModalResult = mrCancel`.
 
-The captions are passed as strings, with no enum in the middle. The application chooses what the buttons say in the language of the domain. The `TModalResult` is an integer that the callback uses to identify the answer.
-
-There is also a useful side effect: the buttons can carry **application-defined** modal results, not just standard ones:
+Custom buttons can also use application-defined modal results:
 
 ```delphi
 const
   mrSaveAndClose = TModalResult(100);
   mrCloseNoSave  = TModalResult(101);
 ```
-
-And the callback can switch on the application's own vocabulary:
 
 ```delphi
 case AResult of
@@ -440,77 +446,56 @@ case AResult of
 end;
 ```
 
-This is a small change in shape with a meaningful consequence:
+`mrNone` is reserved as Dialog4D's internal "no result" value and is rejected as
+a custom-button result.
 
-> **The dialog is no longer a generic Yes/No question.**  
-> **It is a list of named actions, each with its own visual role.**
+This is the conceptual shift:
 
-Section 10.3 of the bundled demo (`Custom buttons — all four visual roles`) shows this pattern with all four constructors visible at once.
+> **The dialog is not only a Yes/No question.**  
+> It can be a list of named actions, each with its own visual role.
 
 ---
 
-## Part 9 — Capturing the right state: snapshot at call time
+## Part 9 — Capturing the right state: request-time snapshots
 
-A subtle problem appears once you start using themes and customization at the dialog level.
+A subtle problem appears once dialogs become themeable and queueable.
 
-Suppose your application has two themes: a light theme for daytime use and a dark theme for nighttime. The user can switch between them at any time. The application has the following code:
+Suppose your application has a dark theme and a light theme. It queues a dialog
+while the dark theme is active, then the user changes the theme before the
+dialog is actually displayed. Which theme should the queued dialog use?
 
-```delphi
-ApplyDarkTheme;
+Dialog4D answers that with request-time snapshots:
 
-// Step 1: ask the user to confirm
-TDialog4D.MessageDialogAsync(
-  'Save before closing?',
-  ...,
-  procedure(const R1: TModalResult)
-  begin
-    if R1 = mrYes then
-    begin
-      ApplyLightTheme;  // theme switch between dialogs
+> **When `MessageDialogAsync` is called, Dialog4D captures the configuration
+> needed by that request.**
 
-      // Step 2: confirm save success
-      TDialog4D.MessageDialogAsync(
-        'Saved successfully.',
-        ...,
-        procedure(const R2: TModalResult)
-        begin
-          ...
-        end);
-    end;
-  end);
-```
+The captured data includes:
 
-The first dialog should render in the dark theme. The second should render in the light theme. The user-visible behavior should match the theme that was active at the moment each dialog was requested.
+- a value copy of `TDialog4DTheme`;
+- the text-provider reference;
+- the telemetry sink;
+- the result callback;
+- the button definitions, including a copied custom-button array.
 
-But what happens if there is queueing pressure? What if another dialog from a different source is already on screen, and Step 1 enters the queue and waits? When Step 1 finally renders, what theme should it use — the theme that was active when the request was made, or the current global theme?
+Later calls to `ConfigureTheme` do not affect requests already in flight. A
+queued dialog renders with the theme that was active when the request was made.
 
-This is not a hypothetical. It happens any time the application:
+This is intentionally a snapshot of the request configuration. It is not a deep
+clone of arbitrary objects behind provider or callback references. The theme is
+copied by value, while provider/sink/callback values are captured as references
+or procedure values.
 
-- changes the theme in response to user preferences;
-- changes the theme based on time of day;
-- changes the text provider for localization;
-- changes the telemetry sink for testing.
-
-If the dialog uses the **current** global state at render time, it can use a theme the developer never intended for that specific dialog. The user sees Step 1 rendered in the light theme even though the dark theme was active when the question was asked. The visual flow is incoherent.
-
-Dialog4D solves this with a **snapshot at call time**:
-
-> **When `MessageDialogAsync` is called, the framework captures a copy of the current `FTheme` and a reference to the current `FTextProvider` into the request itself.**  
-> **The dialog renders with the configuration that was active at the moment of the call, regardless of what happens to the global state afterward.**
-
-The snapshot is a value copy. Subsequent calls to `ConfigureTheme` do not affect requests already in flight. A multi-step decision flow that switches theme between steps will render each step with the theme that was active when that step was requested.
-
-This is what makes Dialog4D safe for applications that change global configuration at runtime. The developer does not have to worry about timing — the framework guarantees the visual identity each request was supposed to have.
-
-Section 5.3 of the bundled demo (`Theme snapshot during queue`) demonstrates this directly: it shows a dialog with the default theme, switches to the cyberpunk theme between dialogs, and the second dialog renders correctly with the new theme without affecting the first.
+Section 5.3 of the bundled demo (`Theme snapshot`) demonstrates the behavior by
+switching themes between dialogs.
 
 ---
 
 ## Part 10 — Worker threads: waiting for a decision without blocking the UI
 
-Up to this point, the dialog model has been: the main thread asks a question, the user answers, the callback runs on the main thread. This covers most cases.
+Most dialog flows start on the main thread and continue through a main-thread
+callback. Some workflows are different.
 
-Some cases are different. Consider an import operation running on a worker thread:
+Consider an import operation running on a worker thread:
 
 ```delphi
 TTask.Run(
@@ -522,20 +507,19 @@ TTask.Run(
     if SomethingUnexpected then
     begin
       // Need to ask the user: continue or cancel?
-      // But we are on a worker thread.
+      // But this code is running on a worker thread.
     end;
 
     ImportRemainingBatches;
   end);
 ```
 
-The worker thread needs to ask the user a question and wait for the answer before deciding what to do next. The decision affects the worker's flow, not the UI's flow.
+The worker needs a decision before it can continue. A normal asynchronous dialog
+call returns immediately, so the worker would keep running before the answer is
+known.
 
-The naive approach — call `TDialog4D.MessageDialogAsync` from the worker — does not work, because `MessageDialogAsync` returns immediately. The worker would continue executing without waiting for the user's answer. The callback would arrive later, on the main thread, with no way to feed it back into the worker's logic.
-
-The right shape is: the worker **blocks** until the user has answered. The main thread renders the dialog normally and stays responsive. When the user answers, the worker unblocks with the result.
-
-Dialog4D provides `TDialog4DAwait.MessageDialogOnWorker` for exactly this:
+Dialog4D provides `TDialog4DAwait.MessageDialogOnWorker` for this specific
+shape:
 
 ```delphi
 TTask.Run(
@@ -567,59 +551,81 @@ TTask.Run(
   end);
 ```
 
-The worker blocks on the await call. The main thread continues rendering normally. The dialog appears, the user answers, and the worker unblocks with the result.
+This gives the worker thread synchronous wait semantics while preserving the
+normal asynchronous UI pipeline:
 
-There is one important rule:
+- the worker blocks waiting for a result or timeout;
+- the main thread remains free to render and process the dialog;
+- the visual dialog is created through the normal Dialog4D pipeline;
+- timeout ends only the worker wait, not the visual dialog itself.
+
+There are two important rules:
 
 > **`MessageDialogOnWorker` cannot be called from the main thread.**  
-> **The framework raises `EDialog4DAwait` immediately if you try.**
+> Dialog4D raises `EDialog4DAwait` immediately if you try.
 
-The reason is simple: the main thread is the one that should render the dialog. If the main thread is parked waiting for the dialog to close, nothing can render it, and the application deadlocks. The library refuses to enter that state.
+Dialog4D also raises `EDialog4DAwait` when no buttons are supplied or when the
+underlying show pipeline cannot present the dialog.
 
-A second rule about the timeout:
+The reason is straightforward: the main thread is responsible for rendering and
+processing the dialog. If it blocks waiting for the dialog result, the dialog
+cannot complete.
 
-> **The timeout governs the worker's patience, not the dialog's lifetime.**  
-> **When the timeout expires, the worker stops waiting and returns `dasTimedOut`. The dialog stays on screen until the user dismisses it manually.**
+> **Timeout governs the worker's patience, not the dialog's lifetime.**  
+> When the timeout expires, the worker returns `dasTimedOut` with `mrNone`. The
+> visual dialog may still remain on screen.
 
-If you want to dismiss the dialog after a worker timeout, you can call `TDialog4D.CloseDialog` from the same worker — the next part covers this.
+If the application wants to dismiss the still-visible dialog after a timeout, it
+can request `TDialog4D.CloseDialog` separately.
 
-The smart `MessageDialog` overload (without `OnWorker`) detects the calling thread and adapts: on the main thread it delegates to `MessageDialogAsync` (non-blocking), on a worker thread it delegates to `MessageDialogOnWorker` (blocking). This lets shared code call `MessageDialog` regardless of thread context, but it is best used when the calling thread is genuinely uncertain — when you know which thread you are on, the explicit calls are clearer.
+The smart `TDialog4DAwait.MessageDialog` overload detects the calling thread:
 
-Section 8.1 of the bundled demo (`MessageDialogOnWorker — blocking`) shows this pattern live, with logging of the worker's blocked state and the moment it unblocks.
+- on the main thread, it delegates to `MessageDialogAsync`;
+- on a worker thread, it delegates to `MessageDialogOnWorker`.
+
+When called from a worker thread, the callback runs on the worker thread by
+default. Pass `ACallbackOnMain = True` to redispatch the callback to the main
+thread.
+
+Section 8.1 of the bundled demo (`Worker await`) shows this pattern live, with
+logging of the worker's blocked state and the moment it unblocks.
 
 ---
 
-## Part 11 — Closing programmatically, theming, and telemetry
+## Part 11 — Programmatic close, theming, and telemetry
 
-Three more concerns appear in real applications, and Dialog4D addresses each one:
+Three more concerns often appear in applications where dialogs are part of the
+flow.
 
-### Closing the active dialog programmatically
+### Programmatic close
 
-Sometimes the application needs to dismiss a dialog without the user clicking a button. Examples:
+Sometimes the application needs to dismiss a dialog without waiting for the user
+to click a button. Examples:
 
-- the operation that prompted the dialog is cancelled by another part of the application;
+- the operation that prompted the dialog is cancelled elsewhere;
 - a server response makes the question obsolete;
 - a worker thread times out and wants to clean up the visible dialog;
-- the navigation flow moves to another screen.
+- navigation moves the user to another screen.
 
-`FMX.DialogService` does not provide a built-in way to close the active dialog programmatically. The dialog stays visible until the user dismisses it, even if the question is no longer relevant.
-
-Dialog4D provides `TDialog4D.CloseDialog`:
+Dialog4D adds `TDialog4D.CloseDialog` for this case:
 
 ```delphi
-// Thread-safe — can be called from any thread
 TDialog4D.CloseDialog(MyForm, mrCancel);
 ```
 
-The active dialog for the given form is dismissed, the user callback fires with the result you passed, and the queue advances normally. Telemetry records the close as `crProgrammatic`.
-
-This is what enables cleanup patterns like "the dialog asks for confirmation, but if the user takes too long, we cancel automatically and proceed with a default action".
+This requests closure of the active Dialog4D dialog for the given form. The
+actual visual close is marshalled to the main thread when needed. Telemetry
+records the close as `crProgrammatic`.
 
 ### Theming as application identity
 
-A dialog is not just a question — it is a visual surface that participates in the application's identity. Default OS dialogs have one look. Themed dialogs in your application palette have another. The same dialog shown in a corporate-neutral theme reads differently from the same dialog shown in a high-contrast neon theme.
+A dialog is not only a question; it is also a visual surface inside the
+application. If dialogs are part of the application's visual identity, it can be
+useful to render them through the same FMX styling model as the rest of the UI.
 
-Dialog4D treats theming as a first-class concern. `TDialog4DTheme` is a value record with fields for geometry, overlay, typography, accent palette, button visuals, and the default-button highlight ring. The theme is configured globally:
+`TDialog4DTheme` is a value record with fields for geometry, overlay,
+typography, accent palette, button visuals, and the default-button highlight
+ring:
 
 ```delphi
 var
@@ -633,17 +639,16 @@ begin
 end;
 ```
 
-Themes are captured as snapshots at call time (Part 9), so changing the theme between dialogs does not affect dialogs already in flight.
-
-Sections 2.1, 2.2, and 2.3 of the bundled demo show three pre-built themes — *Custom*, *Dark*, and *Cyberpunk* — with the same dialog rendering in three completely different visual identities.
+Themes are captured at request time, so changing the theme between requests does
+not affect dialogs already queued.
 
 ### Telemetry as observability
 
-When something goes wrong in production, you want to know what the user did. Did they click the dangerous button? Did they cancel? Did they ignore the warning? Did the dialog ever even appear?
+When something goes wrong in production, it can be useful to know how the dialog
+flow behaved. Did the dialog appear? How long was it visible? Was it closed by a
+button, backdrop, key, programmatic close, or form destruction?
 
-`FMX.DialogService` does not provide built-in structured telemetry for dialog lifecycle and close reasons. The dialog appears, the callback fires, the result is delivered — but there is no ready-made record of the full interaction flow.
-
-Dialog4D emits seven lifecycle events through a configurable telemetry sink:
+Dialog4D emits lifecycle events through a configurable telemetry sink:
 
 ```delphi
 TDialog4D.ConfigureTelemetry(
@@ -655,32 +660,38 @@ TDialog4D.ConfigureTelemetry(
   end);
 ```
 
-The events cover the full lifecycle: `tkShowRequested`, `tkShowDisplayed`, `tkCloseRequested`, `tkClosed`, `tkCallbackInvoked`, `tkCallbackSuppressed`, `tkOwnerDestroying`. Each event carries the dialog type, title, message length, button count, default result, the close reason (button, backdrop, key, programmatic, owner-destroying), the triggered button (kind and caption), elapsed time, and an absolute timestamp.
+The events cover: `tkShowRequested`, `tkShowDisplayed`, `tkCloseRequested`,
+`tkClosed`, `tkCallbackInvoked`, `tkCallbackSuppressed`, and
+`tkOwnerDestroying`.
 
-The sink is best-effort: exceptions raised inside the sink are silently swallowed by the framework. A misbehaving telemetry consumer cannot break the dialog flow.
+Telemetry is best-effort. Exceptions raised inside the sink are swallowed by the
+Dialog4D pipeline so instrumentation cannot break dialog flow.
 
-This is what turns dialog interaction into **observable application behavior**. Section 2.6 of the bundled demo toggles telemetry live and shows every event flowing into the on-screen log.
+Telemetry records the Dialog4D lifecycle. It should not be treated as proof that
+a domain operation launched by an application callback completed successfully;
+domain success/failure belongs to application logic.
 
 ---
 
 ## Part 12 — Dialog4D: the concepts in a cohesive package
 
-Putting all the pieces together, Dialog4D is the FMX dialog mechanism that consolidates the decisions made along this guide.
+Putting the pieces together, Dialog4D consolidates the patterns discussed in
+this guide into one FMX-rendered dialog library.
 
 ### What each piece solves
 
 | Concept | What it solves |
 |---|---|
-| `MessageDialogAsync` | Asynchronous dialogs with a callback that runs on the main thread, on every platform |
-| Per-form FIFO queue | Concurrent dialog requests are serialized automatically; no overlap |
-| Snapshot at call time | Theme and text provider captured at the moment of the call; not affected by later changes |
-| `TDialog4DCustomButton` | Buttons with domain-language captions and four visual roles (default, destructive, cancel, neutral) |
+| `MessageDialogAsync` | Asynchronous dialogs with a result callback on the main-thread UI path |
+| Per-form FIFO queue | Dialog requests for the same form are serialized automatically |
+| Request-time snapshot | Theme values and request configuration remain stable while queued |
+| `TDialog4DCustomButton` | Buttons with domain-language captions and visual roles |
 | `TDialog4DAwait.MessageDialogOnWorker` | Worker threads can wait for a user decision without blocking the UI |
-| `TDialog4D.CloseDialog` | Programmatic dismissal of the active dialog, from any thread |
-| `TDialog4DTheme` | First-class theming with a snapshot model |
+| `TDialog4D.CloseDialog` | Programmatic close request for the active Dialog4D dialog |
+| `TDialog4DTheme` | Configurable FMX-rendered dialog theming |
 | `IDialog4DTextProvider` | Pluggable text provider for localization |
-| `TDialog4D.ConfigureTelemetry` | Seven lifecycle events with close reason, button context, and timing |
-| `DialogService4D` | Drop-in migration facade for `FMX.DialogService` callers |
+| `TDialog4D.ConfigureTelemetry` | Lifecycle observability with close reason, button context, and timing |
+| `DialogService4D` | Adapter for common `FMX.DialogService`-style callback code |
 
 ### A complete example bringing the parts together
 
@@ -735,59 +746,80 @@ end;
 
 This code:
 
-- works identically on Windows, macOS, iOS, and Android;
-- never blocks the main thread, on any platform;
+- uses one asynchronous Dialog4D API shape across the supported FMX platforms;
+- keeps the main thread unblocked;
 - speaks domain language in the button captions;
-- enforces the "dialog as flow router" pattern by shape;
-- queues automatically if another dialog is requested concurrently for the same form;
-- captures the active theme at call time, immune to theme changes between steps;
-- emits telemetry events that an external sink can log for observability.
-
-These properties are not opt-in features. They are the default behavior of every `MessageDialogAsync` call.
+- makes the continuation explicit in callbacks;
+- queues automatically if another Dialog4D request is already active for the
+  same form;
+- captures the active theme at request time;
+- emits lifecycle telemetry that an application can log for observability.
 
 ### A note on intent
 
-Dialog4D was not built to compete with `FMX.DialogService`. It was built to address the cases where the recommended approach starts to push coordination concerns into application code: queueing, snapshots, custom buttons, programmatic close, theming consistency, telemetry, and worker-thread integration. For the simple case of a one-off OS-styled message, `FMX.DialogService` remains a good choice. For applications where dialogs are part of the visual identity and the application flow, Dialog4D consolidates the patterns into a mechanism that does not need to be rebuilt in every project.
+Dialog4D was built to make certain FMX dialog concerns easier to handle when
+they appear together: queueing, request snapshots, custom buttons, programmatic
+close, theming, telemetry, and worker-thread wait semantics.
 
-The result is an API with a small public surface — three configuration calls, two `MessageDialogAsync` overloads, one `CloseDialog`, and the await family — but dense in correct decisions underneath. With a small amount of configuration, the developer obtains:
+For a simple OS/platform-styled message, `FMX.DialogService` remains a good
+choice. For applications where dialogs are part of the visual identity and the
+application flow, Dialog4D provides those coordination patterns in one place.
 
-- asynchronous dialogs with deterministic lifecycle on every platform;
-- per-form FIFO queueing without manual coordination;
-- snapshot-based isolation of queued requests;
-- custom buttons with four visual roles;
+The result is a small public surface — configuration calls,
+`MessageDialogAsync`, `CloseDialog`, and the await family — with explicit
+lifecycle decisions underneath:
+
+- asynchronous dialog flow on the UI thread;
+- per-form FIFO queueing;
+- request-time snapshots;
+- custom buttons with visual roles;
 - worker-thread await with timeout;
-- programmatic close from any thread;
-- complete theming with a default-button highlight model;
-- pluggable text provider for localization;
-- structured telemetry with seven lifecycle events;
+- programmatic close with main-thread marshaling;
+- configurable theming;
+- pluggable text provider;
+- structured telemetry;
 - form-destruction safety with callback suppression;
-- and a drop-in migration facade for existing `FMX.DialogService` callers.
+- and an adapter for common `FMX.DialogService`-style callback code.
 
 ---
 
 ## Recommended reading
 
-For readers who want to go deeper into the FMX framework and asynchronous patterns in Delphi, three references are worth highlighting:
+For readers who want to go deeper into FMX dialogs and asynchronous patterns in
+Delphi, these references are useful:
 
 - **[Embarcadero DocWiki — `TDialogService.MessageDialog`](https://docwiki.embarcadero.com/Libraries/Florence/en/FMX.DialogService.TDialogService.MessageDialog)** — the official FMX dialog service reference, including synchronous/asynchronous behavior according to `PreferredMode` and platform.
-- **[Marco Cantù — *Object Pascal Handbook*](https://www.embarcadero.com/products/delphi/object-pascal-handbook)** — a book/eBook on modern Object Pascal, including anonymous methods; the [author page](https://www.marcocantu.com/objectpascalhandbook/) also keeps references to printed editions and Amazon links.
+- **[Embarcadero DocWiki — `TDialogService.TPreferredMode`](https://docwiki.embarcadero.com/Libraries/Florence/en/FMX.DialogService.TDialogService.TPreferredMode)** — the official description of `Platform`, `Async`, and `Sync` modes.
+- **[Embarcadero DocWiki — `FMX.Dialogs.MessageDlg`](https://docwiki.embarcadero.com/Libraries/Athens/en/FMX.Dialogs.MessageDlg)** — notes on legacy `MessageDlg`, callbacks, blocking behavior, and Android support.
+- **[Marco Cantù — *Object Pascal Handbook*](https://www.embarcadero.com/products/delphi/object-pascal-handbook)** — a book/eBook on modern Object Pascal, including anonymous methods.
 - The companion **[SafeThread4D conceptual guide](https://github.com/eduardoparaujo/SafeThread4D/blob/main/docs/Guide_en.md)** — for a deeper treatment of threading, `Synchronize`, `Queue`, and worker-thread coordination patterns referenced throughout this guide.
 
 ---
 
 ## Epilogue — Next steps
 
-If you have made it this far, you have a solid conceptual foundation in FMX dialogs. You know **why** each layer in the dialog story exists, from the simplest `ShowMessage` to a fully-featured queueing and observable mechanism.
+If you have made it this far, you have a solid conceptual foundation in FMX
+dialogs. You know why each layer in the dialog story exists, from a simple
+notification to a queue-aware and observable dialog mechanism.
 
 Natural next steps:
 
-1. **Clone Dialog4D** and run the bundled demo. Each of the ten sections in the demo corresponds to a concept covered in this guide.
-2. **Read the [project README](../README.md)**, with the API surface and migration recipes.
-3. **Read [`Architecture.md`](Architecture.md)** if you want to understand the mechanism from the inside — the registry, the visual host, the close pipeline, and the form-destruction handling.
-4. **Read the source code** calmly. The library is not large, and the pieces map directly onto the concepts in this guide.
+1. **Clone Dialog4D** and run the bundled demo. Each of the ten sections in the
+   demo corresponds to a concept covered in this guide.
+2. **Read the [project README](../README.md)** for the API surface and usage
+   examples.
+3. **Read [`Architecture.md`](Architecture.md)** if you want to understand the
+   mechanism from the inside — the registry, the visual host, the close
+   pipeline, form-destruction handling, and await layer.
+4. **Read the source code** calmly. The library is not large, and the pieces map
+   directly onto the concepts in this guide.
 
-If, at some point, you find yourself manually coordinating dialog queueing, working around theme changes between steps, or wishing you had observability of which dialogs the user actually saw, it may be time to stop rebuilding the mechanism from scratch in every project.
+If you find yourself repeatedly coordinating dialog queues, preserving visual
+configuration across queued requests, or adding observability around dialog
+decisions, Dialog4D may be a useful layer to evaluate.
 
 ---
 
-*This text is an introductory conceptual guide. For practical usage and mechanism details, consult the [README.md](../README.md), the architecture notes in [`Architecture.md`](Architecture.md), and the project examples.*
+*This text is an introductory conceptual guide. For practical usage and
+mechanism details, consult the [README.md](../README.md), the architecture notes
+in [`Architecture.md`](Architecture.md), and the project examples.*

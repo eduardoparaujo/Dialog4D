@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2026 Eduardo P. Araujo
-// https://github.com/eduardoparaujo/dialog4D
+// https://github.com/eduardoparaujo/Dialog4D
 
 {*
   Unit   : Dialog4D.Tests.Types
@@ -9,23 +9,39 @@
            This fixture verifies the core public value types exposed by
            Dialog4D.Types, with focus on:
              - TDialog4DCustomButton factory helpers
+             - rejection of mrNone as a custom button modal result
              - TDialog4DTheme.Default baseline values
              - record copy behavior for TDialog4DTheme
 
            These tests help protect the public contract relied on by the rest
-           of the framework, especially default configuration values and custom
+           of the library, especially default configuration values and custom
            button construction semantics.
+
+  Part of the Dialog4D automated test suite.
+
+  Author        : Eduardo P. Araujo
+  Created       : 2026-04-26
+  Last modified : 2026-05-01
+  Version       : 1.0.1
 
   Notes:
     - The fixture validates both convenience constructors
       (Default / Destructive / Cancel) and the base Make constructor.
+    - mrNone is reserved and must not be accepted as a custom button result.
     - Theme tests intentionally assert concrete default values so regressions
       in the public baseline theme are detected immediately.
 
-  Author        : Eduardo P. Araujo
-  Created       : 2026-04-26
-  Last modified : 2026-04-26
-  Version       : 1.0.0
+  History:
+    1.0.1 — 2026-05-01 — Custom button validation coverage.
+      • Added tests ensuring TDialog4DCustomButton.Make rejects mrNone.
+      • Added tests ensuring Default and Destructive helpers also reject
+        mrNone because they delegate to Make.
+      • Updated header comments to reflect the reserved mrNone contract.
+
+    1.0.0 — 2026-04-26 — Initial public release.
+      • Added tests for custom button helper construction.
+      • Added tests for TDialog4DTheme.Default baseline values.
+      • Added tests for TDialog4DTheme record copy behavior.
 *}
 
 unit Dialog4D.Tests.Types;
@@ -44,6 +60,10 @@ type
     [Test] procedure CustomButton_Make_PreservesModalResult;
     [Test] procedure CustomButton_Make_PreservesIsDefault;
     [Test] procedure CustomButton_Make_PreservesIsDestructive;
+
+    [Test] procedure CustomButton_Make_WithMrNone_Raises;
+    [Test] procedure CustomButton_Default_WithMrNone_Raises;
+    [Test] procedure CustomButton_Destructive_WithMrNone_Raises;
 
     [Test] procedure CustomButton_Default_SetsPrimaryFlags;
     [Test] procedure CustomButton_Destructive_SetsDestructiveFlags;
@@ -66,7 +86,9 @@ type
 implementation
 
 uses
+  System.SysUtils,
   System.UITypes,
+
   Dialog4D.Types;
 
 { TDialog4DCustomButton }
@@ -105,6 +127,63 @@ begin
   LButton := TDialog4DCustomButton.Make('Delete', mrAbort, False, True);
 
   Assert.IsTrue(LButton.IsDestructive);
+end;
+
+procedure TDialog4DTypesTests.CustomButton_Make_WithMrNone_Raises;
+begin
+  try
+    TDialog4DCustomButton.Make('Invalid', mrNone, False, False);
+
+    Assert.Fail('Expected exception was not raised.');
+  except
+    on E: EArgumentException do
+      Assert.IsTrue(
+        Pos('mrNone', E.Message) > 0,
+        'Unexpected exception message: ' + E.Message
+      );
+    on E: Exception do
+      Assert.Fail(
+        'Expected EArgumentException, but got ' + E.ClassName + ': ' + E.Message
+      );
+  end;
+end;
+
+procedure TDialog4DTypesTests.CustomButton_Default_WithMrNone_Raises;
+begin
+  try
+    TDialog4DCustomButton.Default('Invalid Default', mrNone);
+
+    Assert.Fail('Expected exception was not raised.');
+  except
+    on E: EArgumentException do
+      Assert.IsTrue(
+        Pos('mrNone', E.Message) > 0,
+        'Unexpected exception message: ' + E.Message
+      );
+    on E: Exception do
+      Assert.Fail(
+        'Expected EArgumentException, but got ' + E.ClassName + ': ' + E.Message
+      );
+  end;
+end;
+
+procedure TDialog4DTypesTests.CustomButton_Destructive_WithMrNone_Raises;
+begin
+  try
+    TDialog4DCustomButton.Destructive('Invalid Destructive', mrNone);
+
+    Assert.Fail('Expected exception was not raised.');
+  except
+    on E: EArgumentException do
+      Assert.IsTrue(
+        Pos('mrNone', E.Message) > 0,
+        'Unexpected exception message: ' + E.Message
+      );
+    on E: Exception do
+      Assert.Fail(
+        'Expected EArgumentException, but got ' + E.ClassName + ': ' + E.Message
+      );
+  end;
 end;
 
 procedure TDialog4DTypesTests.CustomButton_Default_SetsPrimaryFlags;

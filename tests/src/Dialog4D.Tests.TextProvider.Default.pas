@@ -16,16 +16,26 @@
              - mtCustom returns an empty title
 
            These tests intentionally validate the provider as a stable baseline
-           text source for the framework.
+           text source for the library.
 
-  Notes:
-    - Uses a concrete TDialog4DDefaultTextProvider instance created in Setup.
-    - Keeps assertions explicit to make regressions easy to identify.
+  Part of the Dialog4D automated test suite.
 
   Author        : Eduardo P. Araujo
   Created       : 2026-04-26
   Last modified : 2026-04-26
   Version       : 1.0.0
+
+  Notes:
+    - Uses a concrete TDialog4DDefaultTextProvider instance created in Setup.
+    - Keeps assertions explicit to make regressions easy to identify.
+
+  History:
+    1.0.0 — 2026-04-26 — Initial default text-provider test release.
+      • Added tests for all standard TMsgDlgBtn button captions exposed by
+        TDialog4DDefaultTextProvider.
+      • Added tests for default titles returned for mtInformation, mtWarning,
+        mtError and mtConfirmation.
+      • Added test coverage confirming that mtCustom returns an empty title.
 *}
 
 unit Dialog4D.Tests.TextProvider.Default;

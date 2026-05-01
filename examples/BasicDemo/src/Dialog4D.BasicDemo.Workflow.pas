@@ -1,11 +1,12 @@
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2026 Eduardo P. Araujo
+// https://github.com/eduardoparaujo/Dialog4D
 
 {*
-  Unit   : UnitDialog4D_Demo.Workflow
-  Purpose: UI-agnostic support types and demo service used by UnitDialog4D_Demo
-           to illustrate dialog-driven business actions with dependency
-           injection.
+  Unit   : Dialog4D.BasicDemo.Workflow
+  Purpose: UI-agnostic support types and demo service used by
+           Dialog4D.BasicDemo.Main to illustrate dialog-driven business
+           actions with dependency injection.
 
            This unit exists to keep the demonstration of business flow
            separate from the FMX form. It defines:
@@ -25,16 +26,34 @@
            responsible only for representing and executing demo workflow
            actions.
 
+  Part of the Dialog4D demo application; not part of the runtime library.
+
+  Author        : Eduardo P. Araujo
+  Created       : 2026-04-26
+  Last modified : 2026-05-01
+  Version       : 1.0.1
+
   Notes:
     - Demo/support unit only. Not part of the Dialog4D runtime library.
     - Used by example 5.6 to demonstrate that Dialog4D can drive business
       decisions without coupling the decision handler to UI code.
     - The demo workflow can simulate success or failure for selected actions.
 
-  Author        : Eduardo P. Araujo
-  Created       : 2026-04-26
-  Last modified : 2026-04-26
-  Version       : 1.0.0
+  History:
+    1.0.1 — 2026-05-01 — Demo workflow metadata clarification.
+      • Updated the unit header to use the final unit name:
+        Dialog4D.BasicDemo.Workflow.
+      • Updated references from the old demo unit naming to
+        Dialog4D.BasicDemo.Main.
+      • Clarified that this unit belongs only to the demo application and is
+        not part of the Dialog4D runtime library.
+      • No functional behavior was changed.
+
+    1.0.0 — 2026-04-26 — Initial demo workflow support release.
+      • Added UI-agnostic workflow action types and structured result record.
+      • Added IDocumentWorkflow as a demo service contract.
+      • Added TDemoDocumentWorkflow as a deterministic fake implementation for
+        success and failure workflow scenarios.
 *}
 
 unit Dialog4D.BasicDemo.Workflow;

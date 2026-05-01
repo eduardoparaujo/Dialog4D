@@ -8,12 +8,12 @@
            telemetry snapshots into human-readable strings suitable for
            logging, debug output, console display, or demo instrumentation.
 
-  Part of the Dialog4D framework - see Dialog4D.Types for the overview.
+  Part of the Dialog4D telemetry support layer.
 
   Author        : Eduardo P. Araujo
   Created       : 2026-04-26
-  Last modified : 2026-04-26
-  Version       : 1.0.0
+  Last modified : 2026-05-01
+  Version       : 1.0.1
 
   Notes:
     - This unit is optional. Dialog4D itself does not require it at runtime
@@ -21,25 +21,47 @@
       text helpers.
 
     - Design notes:
-        * Formatting is intentionally simple and log-friendly — single-line
+        • Formatting is intentionally simple and log-friendly — single-line
           output with stable field ordering.
-        * Standard Delphi modal result constants (mrNone..mrClose) are
+        • Standard Delphi modal result constants (mrNone..mrClose) are
           mapped to symbolic names.
-        * Any non-standard modal result is formatted as Custom(N), where N
+        • Any non-standard modal result is formatted as Custom(N), where N
           is the raw integer value.
-        * When a title is not present in telemetry, an optional text
+        • When a title is not present in telemetry, an optional text
           provider may supply a fallback title for better readability.
-        * ErrorMessage, when present, is appended to the formatted line as
-          an optional diagnostic field.
+        • Textual fields emitted inside quotes are normalized for single-line
+          output and quote-escaped using doubled quotes.
+        • ErrorMessage, when present, is appended as an optional diagnostic
+          field using the same text normalization rules as other quoted
+          fields.
 
   Important:
-    - Exceptions raised inside FormatTelemetry would propagate to the
-      caller, but no public method here is expected to raise under normal
-      use.
+    - Exceptions raised inside FormatTelemetry propagate to the caller, but
+      no public method here is expected to raise under normal use.
 
-    - ModalResultToText uses exhaustive matching on standard modal result
+    - ModalResultToText uses explicit matching on standard modal result
       constants. Values outside that set are always formatted as Custom(N),
       regardless of numeric range.
+
+    - FormatTelemetry is a textual convenience helper. It does not define
+      the telemetry contract itself; the authoritative data contract is
+      TDialog4DTelemetry in Dialog4D.Types.
+
+  History:
+    1.0.1 — 2026-05-01 — Log formatting hardening.
+      • Added shared text normalization for quoted telemetry fields.
+      • Ensured Title, ButtonCaption and ErrorMessage use the same escaping
+        rules instead of escaping only ErrorMessage.
+      • Preserved the documented single-line log contract even when caller
+        data contains CR/LF/TAB characters.
+      • Updated comments to clarify that this unit formats telemetry records
+        but does not define the telemetry lifecycle contract.
+
+    1.0.0 — 2026-04-26 — Initial public release.
+      • Added enum-to-text helpers for telemetry kind, close reason, dialog
+        type, modal result and dialog button kind.
+      • Added FormatTelemetry as a stable, single-line formatter for logging
+        and demo instrumentation.
 *}
 
 unit Dialog4D.Telemetry.Format;
@@ -62,20 +84,29 @@ type
   /// </summary>
   /// <remarks>
   /// <para><b>Purpose:</b></para>
-  /// <para>• Convert telemetry enums into readable text.</para>
-  /// <para>• Provide a stable single-line textual representation for telemetry events, suitable for logs and debug output.</para>
-  /// <para>All methods are class functions and have no internal state.</para>
+  /// <para>
+  /// • Convert telemetry enums into readable text.
+  /// </para>
+  /// <para>
+  /// • Provide a stable single-line textual representation for telemetry
+  /// events, suitable for logs and debug output.
+  /// </para>
+  /// <para>
+  /// All methods are class functions and have no internal state.
+  /// </para>
   /// </remarks>
   TDialog4DTelemetryFormat = class
   public
     /// <summary>
-    /// Converts a telemetry kind (<c>TDialog4DTelemetryKind</c>) into readable text.
+    /// Converts a telemetry kind (<c>TDialog4DTelemetryKind</c>) into readable
+    /// text.
     /// </summary>
     class function TelemetryKindToText(const AKind: TDialog4DTelemetryKind)
       : string; static;
 
     /// <summary>
-    /// Converts a close reason (<c>TDialog4DCloseReason</c>) into readable text.
+    /// Converts a close reason (<c>TDialog4DCloseReason</c>) into readable
+    /// text.
     /// </summary>
     class function CloseReasonToText(const AReason: TDialog4DCloseReason)
       : string; static;
@@ -91,13 +122,13 @@ type
     /// </summary>
     /// <remarks>
     /// <para>
-    /// Standard Delphi modal result constants (<c>mrNone</c>..<c>mrClose</c>) are
-    /// mapped to their symbolic names.
+    /// Standard Delphi modal result constants (<c>mrNone</c>..<c>mrClose</c>)
+    /// are mapped to their symbolic names.
     /// </para>
     /// <para>
-    /// Any other value is formatted as <c>Custom(N)</c> where <c>N</c> is the raw
-    /// integer — this includes application-defined results regardless of their
-    /// numeric range.
+    /// Any other value is formatted as <c>Custom(N)</c> where <c>N</c> is the
+    /// raw integer — this includes application-defined results regardless of
+    /// their numeric range.
     /// </para>
     /// </remarks>
     class function ModalResultToText(const AResult: TModalResult)
@@ -109,14 +140,15 @@ type
     class function MsgDlgBtnToText(const ABtn: TMsgDlgBtn): string; static;
 
     /// <summary>
-    /// Formats a telemetry record as a single-line text entry suitable for logs.
+    /// Formats a telemetry record as a single-line text entry suitable for
+    //  logs.
     /// </summary>
     /// <param name="AData">
     /// Telemetry record to format.
     /// </param>
     /// <param name="AProvider">
-    /// Optional text provider used to resolve fallback titles when the telemetry
-    /// record's <c>Title</c> field is empty.
+    /// Optional text provider used to resolve fallback titles when the
+    /// telemetry record's <c>Title</c> field is empty.
     /// </param>
     /// <returns>
     /// A formatted string containing the event data with stable field ordering.
@@ -126,6 +158,30 @@ type
   end;
 
 implementation
+
+{ ============================= }
+{ == Internal format helpers == }
+{ ============================= }
+
+function NormalizeLogText(const AValue: string): string;
+begin
+  // Keep FormatTelemetry output single-line even when caller-controlled text
+  // contains control characters. Use visible escape sequences rather than
+  // silently removing information.
+  Result := AValue.Replace(#13, '\r').Replace(#10, '\n').Replace(#9, '\t');
+end;
+
+function EscapeQuotedLogText(const AValue: string): string;
+begin
+  // The formatter uses key="value" pairs. Double quotes inside the value
+  // are escaped by doubling them, which keeps the output readable and stable.
+  Result := NormalizeLogText(AValue).Replace('"', '""');
+end;
+
+function QuotedLogText(const AValue: string): string;
+begin
+  Result := '"' + EscapeQuotedLogText(AValue) + '"';
+end;
 
 { ============================== }
 { == TDialog4DTelemetryFormat == }
@@ -285,8 +341,10 @@ class function TDialog4DTelemetryFormat.FormatTelemetry
       so the field stays visible and aligned in log output.
     * EventDateTime: prefer the snapshot's own timestamp; fall back to
       Now only on legacy paths where the snapshot does not carry one.
-    * ErrorMessage: appended as an optional final field, with embedded
-      quotes escaped (" → "").
+    * ErrorMessage: appended as an optional final field when non-empty.
+  - Normalize all quoted text fields so embedded CR/LF/TAB characters do
+    not break the single-line log contract.
+  - Escape embedded quotes in all quoted fields using doubled quotes.
   - Concatenate all fields into a single line with stable ordering. The
     visual alignment of the '+' operators is intentional: it lets a reader
     see at a glance which prefix pairs with which value.
@@ -296,9 +354,8 @@ class function TDialog4DTelemetryFormat.FormatTelemetry
     output, or demo instrumentation. Never raises under normal use.
 
   Invariants
-  - The output is single-line: no embedded line breaks come from the
-    formatter itself (caller-supplied strings are not sanitized for
-    newlines beyond quote-escaping the ErrorMessage).
+  - The output is single-line even when caller-supplied strings contain
+    CR/LF/TAB characters.
   - Field ordering is stable across calls so log lines remain comparable.
 *)
 var
@@ -321,7 +378,7 @@ begin
     LEventText := FormatDateTime('hh:nn:ss.zzz', Now);
 
   if AData.ErrorMessage.Trim <> '' then
-    LErrorText := '  Error="' + AData.ErrorMessage.Replace('"', '""') + '"'
+    LErrorText := '  Error=' + QuotedLogText(AData.ErrorMessage)
   else
     LErrorText := '';
 
@@ -333,9 +390,11 @@ begin
     BoolToStr(AData.HasCancelButton, True) + '  Buttons=' +
     IntToStr(AData.ButtonsCount) + '  Len=' + IntToStr(AData.MessageLen) +
     '  ButtonKind=' + MsgDlgBtnToText(AData.ButtonKind) + '  ButtonCaption=' +
-    '"' + LButtonCaption + '"' + '  ButtonDefault=' +
+    QuotedLogText(LButtonCaption) + '  ButtonDefault=' +
     BoolToStr(AData.ButtonWasDefault, True) + '  ElapsedMs=' +
-    AData.ElapsedMs.ToString + '  Title=' + '"' + LTitle + '"' + LErrorText;
+    AData.ElapsedMs.ToString + '  Title=' + QuotedLogText(LTitle) +
+    LErrorText;
 end;
 
 end.
+

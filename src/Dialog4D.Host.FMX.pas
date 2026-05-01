@@ -7,15 +7,15 @@
   Purpose: Internal FMX visual host for Dialog4D. Renders and manages a
            single dialog instance inside a parent form, including visual
            tree creation, layout recalculation, open/close animation,
-           button layout, keyboard and back-button handling, lifecycle-safe
+           button layout, keyboard and back-button handling, lifecycle-aware
            cleanup, and structured telemetry emission.
 
-  Part of the Dialog4D framework - see Dialog4D.Types for the overview.
+  Internal unit of the Dialog4D FMX visual runtime.
 
   Author        : Eduardo P. Araujo
   Created       : 2026-04-26
-  Last modified : 2026-04-26
-  Version       : 1.0.0
+  Last modified : 2026-05-01
+  Version       : 1.0.1
 
   Notes:
     - This unit is part of the internal rendering pipeline and is not
@@ -23,31 +23,31 @@
       exposed through Dialog4D.pas.
 
     - Visual tree:
-        * TLayout overlay
-        * TRectangle backdrop
-        * TRectangle card
-        * TLayout header (icon wrap + title)
-        * TVertScrollBox
-        * TLayout content
-        * TText message
-        * TLayout button bar
-        * TLayout buttons
+        • TLayout overlay
+        • TRectangle backdrop
+        • TRectangle card
+        • TLayout header (icon wrap + title)
+        • TVertScrollBox
+        • TLayout content
+        • TText message
+        • TLayout button bar
+        • TLayout buttons
 
     - Lifecycle:
-        * dgsClosed → ShowDialog → dgsOpening → OnOpenFinished → dgsOpen
-        * dgsOpen → CloseWithResult → dgsClosing → OnCloseFinished
-        * OnCloseFinished → FinalizeCloseNow / FinalizeCloseAsync → dgsClosed
+        • dgsClosed -> ShowDialog -> dgsOpening -> OnOpenFinished -> dgsOpen
+        • dgsOpen -> CloseWithResult -> dgsClosing -> OnCloseFinished
+        • OnCloseFinished -> FinalizeCloseNow / FinalizeCloseAsync -> dgsClosed
 
     - Platform notes:
-        * Windows reserves a fixed-width strip on the right side of the
+        • Windows reserves a fixed-width strip on the right side of the
           content area so the scrollbar does not overlap the message text.
-        * Android skips open/close animations to reduce touch-lifecycle
+        • Android skips open/close animations to reduce touch-lifecycle
           timing issues; destruction is always deferred to the main loop via
           FinalizeCloseAsync.
-        * Android back button (vkHardwareBack) is intercepted on OnKeyUp and
+        • Android back button (vkHardwareBack) is intercepted on OnKeyUp and
           always consumed (Key := 0) to prevent the OS from interpreting it
           as a navigation back and closing the activity.
-        * Desktop (Windows/macOS): Enter triggers the default button, Esc
+        • Desktop (Windows/macOS): Enter triggers the default button, Esc
           triggers the cancel button when present and the dialog is
           cancelable.
 
@@ -57,18 +57,48 @@
       Dialog4D.pas.
 
     - Cleanup is lifecycle-sensitive:
-        * FinalizeCloseNow captures the effective close reason before
+        • FinalizeCloseNow captures the effective close reason before
           Cleanup resets internal state.
-        * TDialog4DFormHook is owned by the parent form and triggers safe
-          async cleanup when the form is destroyed.
+        • Normal close emits Closed and callback telemetry before Cleanup so
+          telemetry snapshots still contain the dialog title, message length,
+          button count and triggered-button metadata.
+        • Owner-form destruction is finalized explicitly through the
+          form-owned hook: callbacks are suppressed, Closed is emitted with
+          crOwnerDestroying, and the visual tree is left to the parent form.
 
     - Telemetry is best-effort:
-        * SafeEmitTelemetry emits all lifecycle events.
-        * Exceptions raised by the telemetry sink are silently swallowed and
+        • SafeEmitTelemetry initializes every telemetry record before filling
+          it.
+        • Exceptions raised by the telemetry sink are silently swallowed and
           must never affect dialog flow.
 
     - The default-button highlight is rendered as an inset TRectangle child
       of the button and is fully controlled by the active theme.
+
+  History:
+    1.0.1 — 2026-05-01 — Lifecycle and telemetry consistency correction.
+      • Finalized the owner-destroying path explicitly from the form hook so
+        tkClosed and tkCallbackSuppressed are emitted consistently when the
+        parent form is destroyed.
+      • Initialized TDialog4DTelemetry records with Default(...) before
+        populating fields, avoiding undefined values in future extensions.
+      • Adjusted FinalizeCloseNow so callback telemetry is emitted before
+        Cleanup resets snapshot fields.
+      • Updated comments to clarify that the host callback is the internal
+        close callback supplied by the facade; the actual user callback may
+        be dispatched later by Dialog4D.pas.
+      • Detached FAnimOpen.OnFinish before stopping the open animation in
+        AnimateClose, preventing stale open-finish callbacks from emitting
+        tkShowDisplayed after a close transition has already started.
+      • Added a state guard to OnOpenFinished so stale animation-finish
+        callbacks are ignored unless the host is still in dgsOpening.
+      • Clarified Cleanup invariants to distinguish the internal close callback
+        supplied by Dialog4D.pas from the application user callback dispatched
+        later by the public facade.
+
+    1.0.0 — 2026-04-26 — Initial public release.
+      • Introduced the FMX visual host, layout engine, button rendering,
+        platform input handling, close pipeline and host-level telemetry.
 *}
 
 unit Dialog4D.Host.FMX;
@@ -512,16 +542,23 @@ destructor TDialog4DFormHook.Destroy;
   Owner-destroying notification path.
 
   Strategy
-  - Capture FHost into a local variable and clear the field atomically
-    against any reentry triggered by the host calling DetachHook from
-    inside NotifyOwnerDestroying.
-  - If a host was attached, notify it so user callbacks are suppressed,
-    detach the back-reference, and free the host before the parent form's
-    visual tree disappears.
+  - Capture FHost into a local variable and clear the field before doing
+    anything else. This prevents reentry if the host detaches the hook while
+    the hook destructor is already running.
+  - If a host was attached, notify it that the owner form is being destroyed,
+    finalize the close pipeline immediately in owner-destroying mode, detach
+    the back-reference, and then free the host.
+  - FinalizeCloseNow is called explicitly so owner destruction produces the
+    same terminal telemetry contract as a normal close:
+      • tkOwnerDestroying
+      • tkClosed with crOwnerDestroying
+      • tkCallbackSuppressed with crOwnerDestroying
 
   Invariants
   - FHost may already be nil when an explicit Detach happened earlier.
   - The local LHost is the only safe reference to use after FHost := nil.
+  - In owner-destroying mode Cleanup does not dispose of the visual tree;
+    the parent form owns that teardown.
 *)
 var
   LHost: TDialog4DHostFMX;
@@ -532,6 +569,7 @@ begin
   if Assigned(LHost) then
   begin
     LHost.NotifyOwnerDestroying;
+    LHost.FinalizeCloseNow;
     LHost.DetachHook;
     LHost.Free;
   end;
@@ -639,6 +677,10 @@ begin
   LProc := FTelemetry;
   if not Assigned(LProc) then
     Exit;
+
+  // Initialize the full record before assigning fields. This keeps telemetry
+  // deterministic even if new fields are added to TDialog4DTelemetry later.
+  LData := Default(TDialog4DTelemetry);
 
   LData.Kind := AKind;
   LData.DialogType := FDialogType;
@@ -960,8 +1002,8 @@ procedure TDialog4DHostFMX.EnsureUI(const AParent: TCommonCustomForm);
   Strategy
   - Attach the form-destruction hook so cleanup is triggered if the parent
     form disappears while the dialog is alive.
-  - Build the visual tree top-down: overlay → backdrop → card → header
-    (icon + title) → scroll box → content → message → button bar →
+  - Build the visual tree top-down: overlay -> backdrop -> card -> header
+    (icon + title) -> scroll box -> content -> message -> button bar ->
     buttons. Each container is created and parented before its children.
   - Wire platform-specific input handlers:
     * Desktop (Windows/macOS): OnKeyDown for Enter/Esc.
@@ -1876,8 +1918,8 @@ end;
 function TDialog4DHostFMX.ButtonsAvailableWidth: Single;
 begin
   // Resolve the available width by walking up the layout hierarchy until
-  // we find a control with a known width. Order: FButtons → FButtonBar
-  // (minus padding) → FCard (minus padding × 2) → FTheme.DialogWidth.
+  // we find a control with a known width. Order: FButtons -> FButtonBar
+  // (minus padding) -> FCard (minus padding × 2) -> FTheme.DialogWidth.
   if Assigned(FButtons) and (FButtons.Width > 0) then
     Exit(FButtons.Width);
 
@@ -1958,8 +2000,16 @@ procedure TDialog4DHostFMX.AnimateClose;
 begin
   if (FState = dgsClosing) or (FState = dgsClosed) then
     Exit;
+
+  // Detach OnFinish before stopping the open animation. Some FMX versions or
+  // platform paths may deliver OnFinish when an animation is stopped. If the
+  // open animation is being interrupted by a close transition, a late
+  // OnOpenFinished would emit tkShowDisplayed after tkCloseRequested.
   if Assigned(FAnimOpen) then
+  begin
+    FAnimOpen.OnFinish := nil;
     FAnimOpen.Stop;
+  end;
 
   FState := dgsClosing;
 
@@ -1981,14 +2031,14 @@ end;
 
 procedure TDialog4DHostFMX.OnOpenFinished(Sender: TObject);
 begin
-  if FState = dgsOpening then
-    FState := dgsOpen;
+  // Ignore stale animation-finish callbacks. This can happen if the open
+  // animation is interrupted by a close transition.
+  if FState <> dgsOpening then
+    Exit;
 
-  // Focus the overlay on all platforms.
-  // Desktop: enables Enter/Esc keyboard navigation.
-  // Android: enables OnKeyUp to receive vkHardwareBack.
+  FState := dgsOpen;
+
   TryFocusOverlay;
-
   SafeEmitTelemetry(tkShowDisplayed, mrNone, crNone);
 end;
 
@@ -2000,18 +2050,21 @@ procedure TDialog4DHostFMX.FinalizeCloseNow;
   - Reentrancy guard: FFinalizing prevents a second pass even if a finish
     handler fires twice.
   - Owner-destroying path: emit Closed + CallbackSuppressed telemetry, run
-    Cleanup, set state to dgsClosed and bail out without invoking the user
-    callback (the host is being torn down with the parent form).
-  - Normal path: capture LProc, LRes and LReason BEFORE Cleanup, because
-    Cleanup resets FCloseReason and the snapshot fields. After Cleanup,
-    invoke the user callback wrapped in try/except so a faulty callback
-    cannot leave the close pipeline in a partial state — the exception
-    message is preserved in telemetry for diagnostics.
+    Cleanup, set state to dgsClosed and bail out without invoking the close
+    callback. The parent form is tearing down its visual tree.
+  - Normal path: capture LProc, LRes and LReason, emit Closed, then invoke
+    the internal close callback before Cleanup resets telemetry snapshots.
+    In the public facade this callback only queues the user's OnResult onto
+    the main loop and returns; the actual user callback is dispatched later
+    by Dialog4D.pas from a clean stack.
+  - Cleanup always runs after the terminal telemetry/callback decision so
+    the host returns to a neutral state.
 
   Outcomes
-  - User callback assigned and ran cleanly: tkCallbackInvoked telemetry.
-  - User callback raised: tkCallbackInvoked telemetry with ErrorMessage.
-  - User callback not assigned: tkCallbackSuppressed telemetry.
+  - Close callback assigned and ran cleanly: tkCallbackInvoked telemetry.
+  - Close callback raised: tkCallbackInvoked telemetry with ErrorMessage.
+  - Close callback not assigned or owner destroying: tkCallbackSuppressed
+    telemetry.
 *)
 var
   LProc: TDialog4DResultProc;
@@ -2024,39 +2077,45 @@ begin
 
   if FOwnerDestroying then
   begin
-    SafeEmitTelemetry(tkClosed, mrNone, crOwnerDestroying);
-    SafeEmitTelemetry(tkCallbackSuppressed, mrNone, crOwnerDestroying);
-    Cleanup;
-    FState := dgsClosed;
+    try
+      SafeEmitTelemetry(tkClosed, mrNone, crOwnerDestroying);
+      SafeEmitTelemetry(tkCallbackSuppressed, mrNone, crOwnerDestroying);
+    finally
+      Cleanup;
+      FState := dgsClosed;
+    end;
     Exit;
   end;
 
-  // Capture all values BEFORE Cleanup — Cleanup resets FCloseReason
-  // (and other snapshot fields) to defaults.
+  // Capture values before Cleanup. Cleanup resets FCloseReason and all
+  // telemetry snapshot fields.
   LProc := FOnResult;
   LRes := FClosingResult;
   LReason := FCloseReason;
 
-  SafeEmitTelemetry(tkClosed, LRes, LReason);
-  Cleanup;
-  FState := dgsClosed;
+  try
+    SafeEmitTelemetry(tkClosed, LRes, LReason);
 
-  if Assigned(LProc) then
-  begin
-    try
-      LProc(LRes);
-      SafeEmitTelemetry(tkCallbackInvoked, LRes, LReason);
-    except
-      on E: Exception do
-      begin
-        // Keep the close pipeline deterministic, but preserve the callback
-        // failure message in telemetry for diagnostics.
-        SafeEmitTelemetry(tkCallbackInvoked, LRes, LReason, 0, E.Message);
+    if Assigned(LProc) then
+    begin
+      try
+        LProc(LRes);
+        SafeEmitTelemetry(tkCallbackInvoked, LRes, LReason);
+      except
+        on E: Exception do
+        begin
+          // Keep the close pipeline deterministic, but preserve the callback
+          // failure message in telemetry for diagnostics.
+          SafeEmitTelemetry(tkCallbackInvoked, LRes, LReason, 0, E.Message);
+        end;
       end;
-    end;
-  end
-  else
-    SafeEmitTelemetry(tkCallbackSuppressed, LRes, LReason);
+    end
+    else
+      SafeEmitTelemetry(tkCallbackSuppressed, LRes, LReason);
+  finally
+    Cleanup;
+    FState := dgsClosed;
+  end;
 end;
 
 procedure TDialog4DHostFMX.FinalizeCloseAsync;
@@ -2103,9 +2162,14 @@ procedure TDialog4DHostFMX.Cleanup;
     their destruction.
 
   Invariants
-  - After this method returns, FState is unchanged — the caller decides
-    when to set FState := dgsClosed (FinalizeCloseNow does this after
-    Cleanup so the user callback runs after the state transition).
+  - After this method returns, FState is unchanged. FinalizeCloseNow sets
+    FState := dgsClosed after Cleanup so the host reaches its terminal
+    state only once the visual tree has been disposed of.
+  - The internal close callback (the Dialog4D.pas closure) has already run
+    before this method is called: it is invoked between tkClosed and
+    tkCallbackInvoked / tkCallbackSuppressed telemetry emission.
+  - The application user callback is dispatched separately by the public
+    facade through a queued main-thread callback after this Cleanup returns.
 *)
 begin
   FOnResult := nil;
@@ -2269,3 +2333,4 @@ begin
 end;
 
 end.
+

@@ -19,16 +19,27 @@
            This unit does not define test cases. It exists only to support the
            execution of test fixtures.
 
+  Part of the Dialog4D automated test support layer.
+
+  Author        : Eduardo P. Araujo
+  Created       : 2026-04-26
+  Last modified : 2026-04-26
+  Version       : 1.0.0
+
   Notes:
     - Designed for simple and predictable use in DUnitX tests.
     - Uses CheckSynchronize to process queued work on the main thread.
     - WaitUntil is intended for test scenarios only and should not be reused
       as a production waiting primitive.
 
-  Author        : Eduardo P. Araujo
-  Created       : 2026-04-26
-  Last modified : 2026-04-26
-  Version       : 1.0.0
+  History:
+    1.0.0 — 2026-04-26 — Initial automated test support release.
+      • Added PumpMainThread to process pending synchronized and queued
+        main-thread work during tests.
+      • Added WaitUntil to repeatedly pump the main thread and poll a
+        condition until it becomes True or a timeout expires.
+      • Kept the unit free of test cases; it exists only as shared support for
+        Dialog4D automated test fixtures.
 *}
 
 unit Dialog4D.Tests.Support;

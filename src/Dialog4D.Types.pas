@@ -6,36 +6,36 @@
   Unit   : Dialog4D.Types
   Purpose: Core public type definitions for Dialog4D — enums, records,
            interfaces, callbacks and normalized button descriptors used
-           across the framework.
+           across the library.
 
-  Part of the Dialog4D framework.
+  Part of the Dialog4D public type system.
 
   Author        : Eduardo P. Araujo
   Created       : 2026-04-26
-  Last modified : 2026-04-26
-  Version       : 1.0.0
+  Last modified : 2026-05-01
+  Version       : 1.0.1
 
   Notes:
     - This unit defines the common language shared by configuration,
       telemetry, visual hosting, await helpers and custom button flows.
 
-    - Dialog4D is a lightweight, zero-dependency asynchronous dialog
-      framework for Delphi FMX. It replaces FMX.DialogService with
-      visually consistent, fully themeable dialogs across Windows, macOS,
-      iOS and Android.
+    - Dialog4D is a lightweight, no-third-party-dependency asynchronous
+      dialog library for Delphi FMX. It provides a complementary FMX-rendered
+      dialog layer alongside FMX.DialogService for applications that need
+      themed presentation, per-form queueing, request-time configuration
+      snapshots, structured telemetry, and worker-thread integration across
+      Windows, macOS, iOS and Android.
 
     - Key features reflected in this unit:
-        * Per-form FIFO queue — dialogs for the same form never overlap.
-        * Worker-thread await — TDialog4DAwait blocks a background thread
+        * Per-form FIFO queue — dialogs for the same form do not overlap.
+        * Worker-thread await — TDialog4DAwait can block a background thread
           without blocking the main thread.
-        * Custom buttons — arbitrary captions and TModalResult values.
-        * Structured telemetry — 7 lifecycle events with close-reason
-          tracking.
-        * Theme snapshots — configuration captured at call time, not at
-          render.
-
-    - Minimum Delphi version : 10.4 Sydney
-    - Platforms              : Windows • macOS • iOS • Android
+        * Custom buttons — arbitrary captions and TModalResult values, except
+          mrNone, which is reserved as the internal "no result" value.
+        * Structured telemetry — lifecycle events with close-reason and
+          triggered-button tracking.
+        * Theme snapshots — visual/behavioral theme values are copied by
+          value at request time.
 
   Important:
     - TDialog4DTheme is intended to behave as a true snapshot copied by
@@ -45,6 +45,34 @@
     - TDialog4DButtonConfiguration is an internal-normalized shape used by
       the visual host. It may be built either from standard TMsgDlgBtn
       values or from TDialog4DCustomButton records.
+
+    - Telemetry callback events describe Dialog4D's close-callback pipeline.
+      In the public facade, the visual host invokes an internal close callback
+      that queues the application OnResult dispatch onto the main loop.
+      The final OnResult dispatch is skipped when the parent form enters
+      destruction before that queued dispatch runs. Telemetry should therefore
+      be interpreted as Dialog4D lifecycle observability, not as proof that
+      application code completed.
+
+  History:
+    1.0.1 — 2026-05-01 — Contract wording and custom-button validation hardening.
+      • Aligned positioning wording with the rest of the project: Dialog4D is
+        presented as a complementary FMX-rendered dialog layer alongside
+        FMX.DialogService, scoped to specific coordination needs (theming,
+        per-form queueing, snapshots, telemetry, worker-thread integration).
+      • Clarified that Dialog4D has no third-party dependency rather than no
+        dependency at all, because it intentionally depends on FMX.
+      • Clarified telemetry callback semantics: the host's internal close
+        callback queues the application OnResult dispatch onto the main loop,
+        and that final dispatch is skipped when parent-form destruction begins
+        before the queued dispatch runs.
+      • Documented mrNone as a reserved result and added helper-constructor
+        validation in TDialog4DCustomButton.Make.
+      • Kept TDialog4DTheme snapshot guidance explicit: value fields only.
+
+    1.0.0 — 2026-04-26 — Initial public release.
+      • Introduced shared public types for theme, text providers, callbacks,
+        telemetry, custom buttons and normalized host button configuration.
 *}
 
 unit Dialog4D.Types;
@@ -63,6 +91,13 @@ type
   /// <summary>
   /// Callback invoked when a dialog finishes and produces a modal result.
   /// </summary>
+  /// <remarks>
+  /// <para>
+  /// The callback is dispatched by the public Dialog4D facade after the visual
+  /// host has produced a result. It should return quickly and avoid long
+  /// blocking work on the main thread.
+  /// </para>
+  /// </remarks>
   TDialog4DResultProc = reference to procedure(const AResult: TModalResult);
 
   { ====================== }
@@ -97,10 +132,20 @@ type
   /// Horizontal alignment of the dialog message body text.
   /// </summary>
   /// <remarks>
-  /// <para>• <c>dtaCenter</c> — centered text (default, suitable for short messages).</para>
-  /// <para>• <c>dtaLeading</c> — left-aligned (recommended for messages longer than ~8 words or any text that breaks into more than one line).</para>
-  /// <para>• <c>dtaTrailing</c> — right-aligned (RTL layouts or specific design needs).</para>
-  /// <para>The title is always centered regardless of this setting.</para>
+  /// <para>
+  /// • <c>dtaCenter</c> — centered text, suitable for short messages.
+  /// </para>
+  /// <para>
+  /// • <c>dtaLeading</c> — left-aligned text, recommended for longer or
+  /// multi-line messages.
+  /// </para>
+  /// <para>
+  /// • <c>dtaTrailing</c> — right-aligned text, useful for RTL layouts or
+  /// specific design needs.
+  /// </para>
+  /// <para>
+  /// The title is always centered regardless of this setting.
+  /// </para>
   /// </remarks>
   TDialog4DTextAlign = (dtaCenter, dtaLeading, dtaTrailing);
 
@@ -112,13 +157,31 @@ type
   /// Lifecycle events emitted by <c>Dialog4D</c> telemetry.
   /// </summary>
   /// <remarks>
-  /// <para>• <c>tkShowRequested</c> — request received by the public API.</para>
-  /// <para>• <c>tkShowDisplayed</c> — dialog became visible to the user.</para>
-  /// <para>• <c>tkCloseRequested</c> — close was triggered (button, key, backdrop, programmatic, or owner destruction).</para>
-  /// <para>• <c>tkClosed</c> — visual tree has been disposed.</para>
-  /// <para>• <c>tkCallbackInvoked</c> — user <c>OnResult</c> callback was invoked.</para>
-  /// <para>• <c>tkCallbackSuppressed</c> — callback was skipped (e.g. owner was destroying when the close happened).</para>
-  /// <para>• <c>tkOwnerDestroying</c> — parent form began destruction while the dialog was active.</para>
+  /// <para>
+  /// • <c>tkShowRequested</c> — request accepted by the public API.
+  /// </para>
+  /// <para>
+  /// • <c>tkShowDisplayed</c> — dialog became visible to the user.
+  /// </para>
+  /// <para>
+  /// • <c>tkCloseRequested</c> — close was triggered by a button, key,
+  /// backdrop, programmatic close, or owner destruction.
+  /// </para>
+  /// <para>
+  /// • <c>tkClosed</c> — visual host completed its close finalization.
+  /// </para>
+  /// <para>
+  /// • <c>tkCallbackInvoked</c> — Dialog4D's close-callback pipeline was
+  /// invoked.
+  /// </para>
+  /// <para>
+  /// • <c>tkCallbackSuppressed</c> — close callback was skipped, usually
+  /// because the parent form was destroying.
+  /// </para>
+  /// <para>
+  /// • <c>tkOwnerDestroying</c> — parent form began destruction while the
+  /// dialog was active.
+  /// </para>
   /// </remarks>
   TDialog4DTelemetryKind = (tkShowRequested, tkShowDisplayed, tkCloseRequested,
     tkClosed, tkCallbackInvoked, tkCallbackSuppressed, tkOwnerDestroying);
@@ -133,8 +196,8 @@ type
   /// </para>
   /// <para>
   /// <c>crOwnerDestroying</c> is set when the parent form is being destroyed
-  /// while the dialog is still active — in that case the user <c>OnResult</c>
-  /// callback is suppressed.
+  /// while the dialog is still active — in that case user-result delivery is
+  /// suppressed.
   /// </para>
   /// </remarks>
   TDialog4DCloseReason = (crNone, crButton, crBackdrop, crKeyEsc, crKeyEnter,
@@ -149,8 +212,8 @@ type
   /// visual tree has been destroyed.
   /// </para>
   /// <para>
-  /// All fields are populated by <c>Dialog4D</c> before the telemetry sink is
-  /// invoked.
+  /// Dialog4D initializes the record before emission. Consumers should still
+  /// treat unknown future enum values defensively when formatting telemetry.
   /// </para>
   /// </remarks>
   TDialog4DTelemetry = record
@@ -190,10 +253,10 @@ type
   /// <remarks>
   /// <para><b>Contract:</b></para>
   /// <para>Must be non-blocking.</para>
-  /// <para>Must never raise exceptions that affect dialog flow.</para>
+  /// <para>Should not raise exceptions.</para>
   /// <para>
-  /// Exceptions raised inside the sink are silently swallowed by <c>Dialog4D</c>
-  /// to guarantee that telemetry can never break the dialog lifecycle.
+  /// Exceptions raised inside the sink are silently swallowed by Dialog4D
+  /// telemetry emitters so diagnostic code cannot break the dialog lifecycle.
   /// </para>
   /// </remarks>
   TDialog4DTelemetryProc = reference to procedure
@@ -204,13 +267,19 @@ type
   { =========== }
 
   /// <summary>
-  /// Visual and behavioral configuration snapshot for a <c>Dialog4D</c> instance.
+  /// Visual and behavioral configuration snapshot for a <c>Dialog4D</c>
+  /// instance.
   /// </summary>
   /// <remarks>
   /// <para>
   /// The theme is captured at request time, so later global changes via
   /// <c>TDialog4D.ConfigureTheme</c> do not affect dialogs that are already
   /// queued or visible.
+  /// </para>
+  /// <para>
+  /// Keep this record limited to value-type fields. Adding object references,
+  /// interfaces, dynamic arrays or other managed state would weaken the
+  /// snapshot guarantee unless the facade also performs a deep copy.
   /// </para>
   /// <para>
   /// Use <c>TDialog4DTheme.Default</c> as a starting point and override only
@@ -283,7 +352,7 @@ type
     DefaultButtonHighlightInset: Single;
 
     /// <summary>
-    /// Returns a fully-populated theme with sensible defaults.
+    /// Returns a fully-populated theme with deterministic defaults.
     /// </summary>
     class function Default: TDialog4DTheme; static;
   end;
@@ -293,8 +362,8 @@ type
   { ==================== }
 
   /// <summary>
-  /// Defines a fully custom dialog button with an arbitrary caption and any
-  /// <c>TModalResult</c> value.
+  /// Defines a fully custom dialog button with an arbitrary caption and a
+  /// non-<c>mrNone</c> <c>TModalResult</c> value.
   /// </summary>
   /// <remarks>
   /// <para>
@@ -308,9 +377,9 @@ type
   /// <para>
   /// You may use any <c>TModalResult</c> value, including application-defined
   /// ones above the standard range. The only reserved value is <c>mrNone</c>
-  /// (<c>0</c>), which <c>Dialog4D</c> uses internally to signal "no result".
-  /// Using <c>mrNone</c> as a button result is not supported and will be
-  /// treated as an invalid button.
+  /// (<c>0</c>), which Dialog4D uses internally to signal "no result".
+  /// Helper constructors reject <c>mrNone</c>, and the public facade also
+  /// validates custom-button arrays before showing a dialog.
   /// </para>
   /// <para><b>Cancel detection:</b></para>
   /// <para>
@@ -353,34 +422,37 @@ type
 
     /// <summary>
     /// Result delivered to OnResult when this button is clicked.
-    /// Must not be mrNone.
+    /// Must not be <c>mrNone</c>.
     /// </summary>
     ModalResult: TModalResult;
 
     /// <summary>
-    /// When <c>True</c>, this button is rendered as the primary action (filled
-    /// with <c>AccentInfoColor</c>) and is triggered by the Enter key on desktop.
+    /// When <c>True</c>, this button is rendered as the primary action and is
+    /// triggered by the Enter key on desktop.
     /// </summary>
     /// <remarks>
     /// <para>
     /// At most one button in the set should have <c>IsDefault = True</c>.
     /// </para>
     /// <para>
-    /// If none is <c>True</c>, the first valid button is promoted automatically.
+    /// If none is <c>True</c>, the first valid button is promoted automatically
+    /// by the visual host.
     /// </para>
     /// </remarks>
     IsDefault: Boolean;
 
     /// <summary>
-    /// When <c>True</c>, this button is rendered as a destructive action
-    /// (filled with <c>AccentErrorColor</c>). Suitable for Delete, Remove,
-    /// Discard, etc.
+    /// When <c>True</c>, this button is rendered as a destructive action.
+    /// Suitable for Delete, Remove, Discard, etc.
     /// </summary>
     IsDestructive: Boolean;
 
     /// <summary>
     /// Creates a <c>TDialog4DCustomButton</c> with all fields explicitly set.
     /// </summary>
+    /// <exception cref="EArgumentException">
+    /// Raised when <c>AModalResult = mrNone</c>.
+    /// </exception>
     class function Make(const ACaption: string;
       const AModalResult: TModalResult; const AIsDefault: Boolean = False;
       const AIsDestructive: Boolean = False): TDialog4DCustomButton; static;
@@ -430,8 +502,9 @@ type
   /// <remarks>
   /// <para>
   /// Built from either <c>TMsgDlgBtn</c> (standard path) or
-  /// <c>TDialog4DCustomButton</c> (custom path). The visual host does not
-  /// distinguish between the two.
+  /// <c>TDialog4DCustomButton</c> (custom path). The visual host receives this
+  /// normalized shape and does not need to know which public overload created
+  /// the button.
   /// </para>
   /// <para>
   /// For custom buttons, <c>Btn</c> is set to <c>mbOK</c> as a placeholder —
@@ -440,21 +513,21 @@ type
   /// </remarks>
   TDialog4DButtonConfiguration = record
     /// <summary>
-    /// Standard button kind.
+    /// Standard button kind. For custom buttons this is <c>mbOK</c> as a
+    /// placeholder.
     /// </summary>
-    /// <remarks>
-    /// <para>
-    /// For custom buttons this is <c>mbOK</c> (placeholder).
-    /// </para>
-    /// <para>
-    /// Use <c>Caption</c> to identify the button in telemetry when using
-    /// custom buttons.
-    /// </para>
-    /// </remarks>
     Btn: TMsgDlgBtn;
+
+    /// <summary>Modal result produced by the button.</summary>
     ModalResult: TModalResult;
+
+    /// <summary>Text displayed on the rendered button.</summary>
     Caption: string;
+
+    /// <summary>Whether this button is the default/Enter target.</summary>
     IsDefault: Boolean;
+
+    /// <summary>Whether this button is rendered as destructive.</summary>
     IsDestructive: Boolean;
   end;
 
@@ -525,6 +598,10 @@ class function TDialog4DCustomButton.Make(const ACaption: string;
   const AModalResult: TModalResult; const AIsDefault: Boolean;
   const AIsDestructive: Boolean): TDialog4DCustomButton;
 begin
+  if AModalResult = mrNone then
+    raise EArgumentException.Create
+      ('Dialog4D: custom button ModalResult cannot be mrNone.');
+
   Result.Caption := ACaption;
   Result.ModalResult := AModalResult;
   Result.IsDefault := AIsDefault;
@@ -550,3 +627,4 @@ begin
 end;
 
 end.
+

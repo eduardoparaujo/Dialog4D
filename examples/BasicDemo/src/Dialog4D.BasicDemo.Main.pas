@@ -3,13 +3,20 @@
 // https://github.com/eduardoparaujo/Dialog4D
 
 {*
-  Unit   : UnitDialog4D_Demo
+  Unit   : Dialog4D.BasicDemo.Main
   Purpose: Scenario-driven demonstration and manual validation harness for
            Dialog4D. Covers the public API through practical examples:
            visual consistency, theme/provider customization, telemetry,
            behavioral checks, per-form FIFO queueing, worker-thread await,
            FMX.DialogService comparison, custom-button workflows, and
            dialog-driven business actions via an injected demo service.
+
+  Part of the Dialog4D demo application; not part of the runtime library.
+
+  Author        : Eduardo P. Araujo
+  Created       : 2026-04-26
+  Last modified : 2026-05-01
+  Version       : 1.0.1
 
   Sections:
     1  - Basic dialog types
@@ -26,14 +33,37 @@
   Notes:
     - This unit is a demo and validation surface, not part of the Dialog4D
       runtime library.
+
     - Supporting workflow abstractions used by the examples are isolated in
-      UnitDialog4D_Demo.Workflow to keep UI orchestration separate from
+      Dialog4D.BasicDemo.Workflow to keep UI orchestration separate from
       demo business actions.
 
-  Author        : Eduardo P. Araujo
-  Created       : 2026-04-26
-  Last modified : 2026-04-26
-  Version       : 1.0.0
+    - Queue and async examples intentionally demonstrate Dialog4D behavior
+      under delayed callback execution. Loop values used inside anonymous
+      callbacks must be captured through stable method parameters or local
+      immutable snapshots, not through the mutable loop variable itself.
+
+  History:
+    1.0.1 — 2026-05-01 — Demo wording and queue callback correction.
+      • Fixed example 5.1 (Queue burst from TTask) so each dialog callback logs
+        the correct dialog index.
+      • Moved per-dialog creation to a helper method, preventing anonymous
+        callbacks from capturing the mutable loop variable used by the TTask
+        for-loop.
+      • Clarified example 7.1 wording: DialogService4D is presented as a
+        migration-friendly facade, not as a full drop-in clone of
+        FMX.DialogService.
+      • Restored the previous FMX.DialogService PreferredMode after example
+        9.1 so the demo does not leave global DialogService state changed.
+      • No Dialog4D runtime behavior was changed by these demo corrections.
+
+    1.0.0 — 2026-04-26 — Initial public demo release.
+      • Added scenario-driven examples covering basic dialogs, themes,
+        providers, telemetry, queueing, programmatic close, DialogService4D,
+        Await, FMX.DialogService comparison and custom buttons.
+      • Added workflow-service based examples to demonstrate dialog-driven
+        business actions without coupling demo UI code directly to simulated
+        business logic.
 *}
 
 unit Dialog4D.BasicDemo.Main;
@@ -94,7 +124,6 @@ type
     iwsFailOnClose
   );
 
-  type
   TFormMain = class(TForm)
     MemoLog: TMemo;
     ScrollButtons: TVertScrollBox;
@@ -191,6 +220,7 @@ type
     procedure ButtonIgnoreCloseClick(Sender: TObject);
 
     { == Section 5 == }
+    procedure QueueDemoDialogFromTask(const AIndex, ATotal: Integer);
     procedure ButtonQueueDemoClick(Sender: TObject);
     procedure ButtonTestLongCancelClick(Sender: TObject);
     procedure ButtonThemeSwapDemoClick(Sender: TObject);
@@ -308,7 +338,6 @@ begin
   MemoLog.Lines.Clear;
   LogLine('Dialog4D demo ready.');
   LogLine('');
-
 
   { -- Telemetry -- }
   ButtonTelemetryEnable.Text := '2.7  Telemetry: OFF  (click to enable)';
@@ -1039,32 +1068,42 @@ end;
 { == Section 5 — Queue and stress  == }
 { =================================== }
 
+procedure TFormMain.QueueDemoDialogFromTask(const AIndex, ATotal: Integer);
+begin
+  TDialog4D.MessageDialogAsync(
+    Format('Dialog %d / %d — queued from TTask.Run.', [AIndex, ATotal]),
+    TMsgDlgType.mtInformation,
+    [TMsgDlgBtn.mbOK],
+    TMsgDlgBtn.mbOK,
+    procedure(const R: TModalResult)
+    begin
+      LogLine(NowStr + Format('  Queue callback %d/%d → %s',
+        [AIndex, ATotal, TDialog4DTelemetryFormat.ModalResultToText(R)]));
+    end,
+    'Queue Demo',
+    Self,
+    False
+  );
+end;
+
 procedure TFormMain.ButtonQueueDemoClick(Sender: TObject);
 const
   N = 6;
 begin
   ApplyDefaultTheme;
+
   LogSeparator('5.1  Queue burst — ' + N.ToString + ' dialogs from TTask');
   LogLine(NowStr + '  Scheduling ' + N.ToString + ' dialogs from a background task...');
 
-  TTask.Run(procedure
-  var
-    I: Integer;
-  begin
-    for I := 1 to N do
-      TDialog4D.MessageDialogAsync(
-        Format('Dialog %d / %d — queued from TTask.Run.', [I, N]),
-        TMsgDlgType.mtInformation,
-        [TMsgDlgBtn.mbOK],
-        TMsgDlgBtn.mbOK,
-        procedure(const R: TModalResult)
-        begin
-          LogLine(NowStr + Format('  Queue callback %d/%d → %s',
-            [I, N, TDialog4DTelemetryFormat.ModalResultToText(R)]));
-        end,
-        'Queue Demo', Self, False
-      );
-  end);
+  TTask.Run(
+    procedure
+    var
+      I: Integer;
+    begin
+      for I := 1 to N do
+        QueueDemoDialogFromTask(I, N);
+    end
+  );
 end;
 
 procedure TFormMain.ButtonTestLongCancelClick(Sender: TObject);
@@ -1486,21 +1525,23 @@ end;
 procedure TFormMain.ButtonDialogService4DClick(Sender: TObject);
 begin
   ApplyDefaultTheme;
-  LogSeparator('7.1  DialogService4D — drop-in facade');
+  LogSeparator('7.1  DialogService4D — migration-friendly facade');
 
   TDialogService4D.MessageDialogAsync(
-    'This dialog was opened via TDialogService4D — the drop-in facade for' + sLineBreak +
-    'FMX.DialogService.MessageDialog.' + sLineBreak + sLineBreak +
-    'Migration steps:' + sLineBreak +
+    'This dialog was opened via TDialogService4D — a migration-friendly facade' + sLineBreak +
+    'for common FMX.DialogService-style asynchronous calls.' + sLineBreak + sLineBreak +
+    'Migration steps for common cases:' + sLineBreak +
     '  uses FMX.DialogService  →  uses DialogService4D' + sLineBreak +
     '  TDialogService          →  TDialogService4D' + sLineBreak +
-    '  Remove the HelpCtx (0) argument',
+    '  Remove the HelpCtx (0) argument' + sLineBreak + sLineBreak +
+    'Note: DialogService4D is not intended to be a full behavioral clone of' + sLineBreak +
+    'every FMX.DialogService overload or platform-specific behavior.',
     TMsgDlgType.mtInformation,
     [TMsgDlgBtn.mbOK],
     TMsgDlgBtn.mbOK,
     procedure(const R: TModalResult)
     begin
-      LogResult('7.1 DialogService4D facade', R);
+      LogResult('7.1 DialogService4D migration facade', R);
     end,
     'DialogService4D Demo', Self, False
   );
@@ -1674,6 +1715,8 @@ end;
 { ============================================== }
 
 procedure TFormMain.ButtonDialogServiceSyncRealityCheckClick(Sender: TObject);
+var
+  LOldPreferredMode: TDialogService.TPreferredMode;
 begin
   LogSeparator('9.1  FMX.DialogService callback ordering comparison');
 
@@ -1682,29 +1725,34 @@ begin
   Exit;
 {$ENDIF}
 
+  LOldPreferredMode := TDialogService.PreferredMode;
   TDialogService.PreferredMode := TDialogService.TPreferredMode.Sync;
+  try
+    TDialogService.MessageDialog(
+      'FMX.DialogService callback ordering comparison.' + sLineBreak + sLineBreak +
+      'Click OK and observe the log:' + sLineBreak +
+      '"OUTSIDE" appears BEFORE "INSIDE" because the line after this call' + sLineBreak +
+      'runs synchronously, before the callback fires.',
+      TMsgDlgType.mtInformation,
+      [TMsgDlgBtn.mbOK],
+      TMsgDlgBtn.mbOK,
+      0,
+      procedure(const AResult: TModalResult)
+      begin
+        if AResult = mrOk then
+          TThread.Queue(nil,
+            procedure
+            begin
+              LogLine(NowStr + '  <- INSIDE  callback: user clicked OK.');
+            end);
+      end
+    );
 
-  TDialogService.MessageDialog(
-    'FMX.DialogService callback ordering comparison.' + sLineBreak + sLineBreak +
-    'Click OK and observe the log:' + sLineBreak +
-    '"OUTSIDE" appears BEFORE "INSIDE" because the line after this call' + sLineBreak +
-    'runs synchronously, before the callback fires.',
-    TMsgDlgType.mtInformation,
-    [TMsgDlgBtn.mbOK],
-    TMsgDlgBtn.mbOK,
-    0,
-    procedure(const AResult: TModalResult)
-    begin
-      if AResult = mrOk then
-        TThread.Queue(nil, procedure
-        begin
-          LogLine(NowStr + '  <- INSIDE  callback: user clicked OK.');
-        end);
-    end
-  );
-
-  // This line runs before the callback — intentional demonstration.
-  LogLine(NowStr + '  <- OUTSIDE callback: logged synchronously BEFORE user decision.');
+    // This line runs before the callback — intentional demonstration.
+    LogLine(NowStr + '  <- OUTSIDE callback: logged synchronously BEFORE user decision.');
+  finally
+    TDialogService.PreferredMode := LOldPreferredMode;
+  end;
 end;
 
 { ========================================================= }

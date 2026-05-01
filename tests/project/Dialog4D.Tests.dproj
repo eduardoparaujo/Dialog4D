@@ -4,7 +4,7 @@
         <MainSource>Dialog4D.Tests.dpr</MainSource>
         <Base>True</Base>
         <Config Condition="'$(Config)'==''">Debug</Config>
-        <TargetedPlatforms>693377</TargetedPlatforms>
+        <TargetedPlatforms>1</TargetedPlatforms>
         <AppType>Console</AppType>
         <FrameworkType>FMX</FrameworkType>
         <ProjectVersion>19.5</ProjectVersion>
@@ -172,6 +172,7 @@
         <DCCReference Include="..\src\Dialog4D.Tests.Telemetry.Format.pas"/>
         <DCCReference Include="..\src\Dialog4D.Tests.TextProvider.Default.pas"/>
         <DCCReference Include="..\src\Dialog4D.Tests.Types.pas"/>
+        <DCCReference Include="..\src\Dialog4D.Tests.Facade.Core.pas"/>
         <BuildConfiguration Include="Base">
             <Key>Base</Key>
         </BuildConfiguration>
@@ -201,12 +202,12 @@
             </Delphi.Personality>
             <Platforms>
                 <Platform value="Android">False</Platform>
-                <Platform value="Android64">True</Platform>
-                <Platform value="iOSDevice64">True</Platform>
-                <Platform value="iOSSimARM64">True</Platform>
-                <Platform value="Linux64">True</Platform>
-                <Platform value="OSX64">True</Platform>
-                <Platform value="OSXARM64">True</Platform>
+                <Platform value="Android64">False</Platform>
+                <Platform value="iOSDevice64">False</Platform>
+                <Platform value="iOSSimARM64">False</Platform>
+                <Platform value="Linux64">False</Platform>
+                <Platform value="OSX64">False</Platform>
+                <Platform value="OSXARM64">False</Platform>
                 <Platform value="Win32">True</Platform>
                 <Platform value="Win64">False</Platform>
             </Platforms>

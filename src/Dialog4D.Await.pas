@@ -8,12 +8,12 @@
            thread to wait for a dialog result while keeping dialog
            presentation on the main thread.
 
-  Part of the Dialog4D framework - see Dialog4D.Types for the overview.
+  Part of the Dialog4D worker-thread await layer.
 
   Author        : Eduardo P. Araujo
   Created       : 2026-04-26
-  Last modified : 2026-04-26
-  Version       : 1.0.0
+  Last modified : 2026-05-01
+  Version       : 1.0.1
 
   Notes:
     - TDialog4DAwait provides two API flavors for each button shape:
@@ -22,7 +22,7 @@
       only and block until completion or timeout.
 
     - Smart overloads:
-      * Main thread  -> delegate to MessageDialogAsync (non-blocking)
+      * Main thread   -> delegate to MessageDialogAsync (non-blocking)
       * Worker thread -> delegate to MessageDialogOnWorker (blocking)
 
     - OnWorker overloads:
@@ -35,7 +35,8 @@
       * Default timeout is 5 minutes (300_000 ms)
       * Timeout does NOT close the dialog
       * The worker simply gives up waiting
-      * On dasTimedOut the worker receives mrNone and the callback is not called
+      * On dasTimedOut the worker receives mrNone
+      * On dasTimedOut the smart overload does NOT call the user callback
 
   Internal design:
     - An IDialog4DAwaitState carries a TEvent, result, error string and
@@ -43,6 +44,29 @@
     - The visual dialog is created by MessageDialogAsync on the main thread,
       queued through QueueOnMainThread.
     - The worker thread waits on the event with the requested timeout.
+    - If the wait times out, the dialog may still remain visible and may
+      later be closed by the user, but that late result is no longer delivered
+      to the worker-side smart callback.
+
+  History:
+    1.0.1 — 2026-05-01 — Timeout callback contract correction.
+      • Fixed smart MessageDialog overloads so AOnResult is invoked only when
+        MessageDialogOnWorker returns dasCompleted.
+      • Preserved the documented timeout contract: on dasTimedOut the worker
+        receives mrNone and the smart callback is not called.
+      • Added a shared internal DispatchAwaitCallback helper to avoid duplicated
+        callback dispatch code.
+      • Updated comments and header to make the late-close/timeout behavior
+        explicit.
+      • Removed the local IsMainThreadSafe duplicate; the canonical primitive
+        now lives in Dialog4D.Internal.Queue and is shared with the public
+        facade.
+
+    1.0.0 — 2026-04-26 — Initial public release.
+      • Introduced worker-thread await support.
+      • Added smart overloads that adapt automatically to main-thread or
+        worker-thread usage.
+      • Added worker-only blocking overloads with timeout support.
 *}
 
 unit Dialog4D.Await;
@@ -69,11 +93,13 @@ type
   /// </summary>
   /// <remarks>
   /// <para>
-  /// • <c>dasCompleted</c> — the user closed the dialog and the result is valid.
+  /// • <c>dasCompleted</c> — the user closed the dialog and the result is
+  /// valid.
   /// </para>
   /// <para>
-  /// • <c>dasTimedOut</c> — the configured timeout elapsed before the user closed
-  /// the dialog. The dialog is left on screen; only the worker stopped waiting.
+  /// • <c>dasTimedOut</c> — the configured timeout elapsed before the user
+  /// closed the dialog. The dialog is left on screen; only the worker stopped
+  /// waiting.
   /// </para>
   /// </remarks>
   TDialog4DAwaitStatus = (dasCompleted, dasTimedOut);
@@ -104,9 +130,19 @@ type
     /// Smart method — works in any thread context.
     /// </summary>
     /// <remarks>
-    /// <para><b>Main thread:</b> async, non-blocking.</para>
-    /// <para><b>Worker thread:</b> blocks until result.</para>
-    /// <para><b>ACallbackOnMain:</b> when <c>True</c> and called from a worker thread, the callback is re-dispatched to the main thread automatically.</para>
+    /// <para>
+    /// <b>Main thread:</b> async, non-blocking.
+    /// </para>
+    /// <para>
+    /// <b>Worker thread:</b> blocks until result or timeout.
+    /// </para>
+    /// <para>
+    /// <b>ACallbackOnMain:</b> when <c>True</c> and called from a worker
+    /// thread, the callback is re-dispatched to the main thread automatically.
+    /// </para>
+    /// <para>
+    /// If the worker wait times out, the callback is not invoked.
+    /// </para>
     /// </remarks>
     class procedure MessageDialog(const AMessage: string;
       const ADialogType: TMsgDlgType; const AButtons: TMsgDlgButtons;
@@ -119,7 +155,10 @@ type
     /// Low-level worker-thread only. Blocks the calling thread.
     /// </summary>
     /// <remarks>
-    /// <para>Must <b>NOT</b> be called from the main thread (raises <c>EDialog4DAwait</c>).</para>
+    /// <para>
+    /// Must <b>NOT</b> be called from the main thread; doing so raises
+    /// <c>EDialog4DAwait</c>.
+    /// </para>
     /// </remarks>
     /// <exception cref="EDialog4DAwait">
     /// Raised when called from the main thread, when the button set is empty,
@@ -137,20 +176,32 @@ type
     { ============================================================= }
 
     /// <summary>
-    /// Smart method — works in any thread context — using custom buttons.
+    /// Smart method using custom buttons. Works in any thread context.
     /// </summary>
     /// <remarks>
-    /// <para><b>Main thread:</b> async, non-blocking.</para>
-    /// <para><b>Worker thread:</b> blocks until result.</para>
-    /// <para><b>ACallbackOnMain:</b> when <c>True</c> and called from a worker thread, the callback is re-dispatched to the main thread automatically.</para>
-    /// <para><b>Example from a worker thread:</b></para>
+    /// <para>
+    /// <b>Main thread:</b> async, non-blocking.
+    /// </para>
+    /// <para>
+    /// <b>Worker thread:</b> blocks until result or timeout.
+    /// </para>
+    /// <para>
+    /// <b>ACallbackOnMain:</b> when <c>True</c> and called from a worker
+    /// thread, the callback is re-dispatched to the main thread automatically.
+    /// </para>
+    /// <para>
+    /// If the worker wait times out, the callback is not invoked.
+    /// </para>
+    /// <para>
+    /// <b>Example from a worker thread:</b>
+    /// </para>
     /// <code>
     /// TDialog4DAwait.MessageDialog(
     ///   'File already exists. What should we do?',
     ///   TMsgDlgType.mtWarning,
     ///   [
-    ///     TDialog4DCustomButton.Default('Replace',   mrYes),
-    ///     TDialog4DCustomButton.Make('Keep Both',    mrNo),
+    ///     TDialog4DCustomButton.Default('Replace', mrYes),
+    ///     TDialog4DCustomButton.Make('Keep Both', mrNo),
     ///     TDialog4DCustomButton.Cancel('Cancel')
     ///   ],
     ///   procedure(const R: TModalResult)
@@ -172,11 +223,14 @@ type
       const ATimeoutMs: Cardinal = 300_000); overload; static;
 
     /// <summary>
-    /// Low-level worker-thread only — using custom buttons.
+    /// Low-level worker-thread only method using custom buttons.
     /// Blocks the calling thread until the user responds or timeout expires.
     /// </summary>
     /// <remarks>
-    /// <para>Must <b>NOT</b> be called from the main thread (raises <c>EDialog4DAwait</c>).</para>
+    /// <para>
+    /// Must <b>NOT</b> be called from the main thread; doing so raises
+    /// <c>EDialog4DAwait</c>.
+    /// </para>
     /// </remarks>
     /// <exception cref="EDialog4DAwait">
     /// Raised when called from the main thread, when the button set is empty,
@@ -202,18 +256,35 @@ uses
 { ==================================== }
 
 /// <summary>
-/// Returns <c>True</c> when the caller is on the main thread.
+/// Delivers an await result callback either inline or queued to the main
+/// thread.
 /// </summary>
 /// <remarks>
 /// <para>
-/// Uses <c>TThread.CurrentThread.ThreadID</c> directly rather than going
-/// through <c>TThread.Current</c>, which can return <c>nil</c> for native
-/// callbacks. This makes the result reliable for all execution contexts.
+/// This helper is intentionally used only after the caller has verified that
+/// the await status is <c>dasCompleted</c>.
 /// </para>
 /// </remarks>
-function IsMainThreadSafe: Boolean;
+procedure DispatchAwaitCallback(const AResult: TModalResult;
+  const AOnResult: TDialog4DResultProc; const ACallbackOnMain: Boolean);
+var
+  LResult: TModalResult;
+  LOnResult: TDialog4DResultProc;
 begin
-  Result := TThread.CurrentThread.ThreadID = MainThreadID;
+  if not Assigned(AOnResult) then
+    Exit;
+
+  LResult := AResult;
+  LOnResult := AOnResult;
+
+  if ACallbackOnMain then
+    QueueOnMainThread(
+      procedure
+      begin
+        LOnResult(LResult);
+      end)
+  else
+    LOnResult(LResult);
 end;
 
 { ============================================== }
@@ -347,30 +418,22 @@ begin
   if IsMainThreadSafe then
   begin
     // Main-thread path: there is no thread to block, so just dispatch the
-    // standard async call. ACallbackOnMain is irrelevant here — the
-    // callback already fires on the main thread.
+    // standard async call. ACallbackOnMain is irrelevant here — the callback
+    // already fires on the main thread.
     TDialog4D.MessageDialogAsync(AMessage, ADialogType, AButtons,
       ADefaultButton, AOnResult, ATitle, AParent, ACancelable);
-  end
-  else
-  begin
-    // Worker-thread path: block on the OnWorker variant, then deliver the
-    // callback either inline (worker) or re-dispatched to the main thread.
-    LResult := MessageDialogOnWorker(AMessage, ADialogType, AButtons,
-      ADefaultButton, LStatus, ATitle, AParent, ACancelable, ATimeoutMs);
-
-    if Assigned(AOnResult) then
-    begin
-      if ACallbackOnMain then
-        QueueOnMainThread(
-          procedure
-          begin
-            AOnResult(LResult);
-          end)
-      else
-        AOnResult(LResult);
-    end;
+    Exit;
   end;
+
+  // Worker-thread path: block on the OnWorker variant, then deliver the
+  // callback only if the dialog completed before the timeout.
+  LResult := MessageDialogOnWorker(AMessage, ADialogType, AButtons,
+    ADefaultButton, LStatus, ATitle, AParent, ACancelable, ATimeoutMs);
+
+  if LStatus <> dasCompleted then
+    Exit;
+
+  DispatchAwaitCallback(LResult, AOnResult, ACallbackOnMain);
 end;
 
 class function TDialog4DAwait.MessageDialogOnWorker(const AMessage: string;
@@ -482,28 +545,23 @@ var
 begin
   if IsMainThreadSafe then
   begin
-    // Main-thread path: dispatch the standard async call directly.
+    // Main-thread path: there is no thread to block, so just dispatch the
+    // standard async call. ACallbackOnMain is irrelevant here — the callback
+    // already fires on the main thread.
     TDialog4D.MessageDialogAsync(AMessage, ADialogType, AButtons, AOnResult,
       ATitle, AParent, ACancelable);
-  end
-  else
-  begin
-    // Worker-thread path: block on the OnWorker variant.
-    LResult := MessageDialogOnWorker(AMessage, ADialogType, AButtons, LStatus,
-      ATitle, AParent, ACancelable, ATimeoutMs);
-
-    if Assigned(AOnResult) then
-    begin
-      if ACallbackOnMain then
-        QueueOnMainThread(
-          procedure
-          begin
-            AOnResult(LResult);
-          end)
-      else
-        AOnResult(LResult);
-    end;
+    Exit;
   end;
+
+  // Worker-thread path: block on the OnWorker variant, then deliver the
+  // callback only if the dialog completed before the timeout.
+  LResult := MessageDialogOnWorker(AMessage, ADialogType, AButtons, LStatus,
+    ATitle, AParent, ACancelable, ATimeoutMs);
+
+  if LStatus <> dasCompleted then
+    Exit;
+
+  DispatchAwaitCallback(LResult, AOnResult, ACallbackOnMain);
 end;
 
 class function TDialog4DAwait.MessageDialogOnWorker(const AMessage: string;
